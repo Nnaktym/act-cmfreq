@@ -1,3 +1,4 @@
+# original
 
 library(CASdatasets)
 library(cmfrec)
@@ -11,18 +12,18 @@ data(brvehins1e)
 
 brvehins=rbind(brvehins1a,brvehins1b,brvehins1c,brvehins1d,brvehins1e)
 
-pt = tapply(brvehins$PremTotal,list(brvehins$VehModel,brvehins$Area),sum) # Œ^E’nˆæ–ˆ‚Ì•ÛŒ¯—¿‚ÌWŒv
-ct = tapply(rowSums(brvehins[,19:23]),list(brvehins$VehModel,brvehins$Area),sum) # Œ^E’nˆæ–ˆ‚ÌƒNƒŒ[ƒ€‘Šz‚ÌWŒv
+pt = tapply(brvehins$PremTotal,list(brvehins$VehModel,brvehins$Area),sum) # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½Ì•ÛŒï¿½ï¿½ï¿½ï¿½ÌWï¿½v
+ct = tapply(rowSums(brvehins[,19:23]),list(brvehins$VehModel,brvehins$Area),sum) # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½ÌƒNï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ÌWï¿½v
 
-pt10000 = pt[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # •ÛŒ¯—¿Œv10000ˆÈãAƒNƒŒ[ƒ€‘ŠzŒv5000ˆÈã‚ÌŒ^‚¾‚¯c‚·
-ct10000 = ct[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # •ÛŒ¯—¿Œv10000ˆÈãAƒNƒŒ[ƒ€‘ŠzŒv5000ˆÈã‚ÌŒ^‚¾‚¯c‚·
+pt10000 = pt[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # ï¿½ÛŒï¿½ï¿½ï¿½ï¿½v10000ï¿½Èï¿½Aï¿½Nï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½v5000ï¿½Èï¿½ÌŒ^ï¿½ï¿½ï¿½ï¿½ï¿½cï¿½ï¿½
+ct10000 = ct[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # ï¿½ÛŒï¿½ï¿½ï¿½ï¿½v10000ï¿½Èï¿½Aï¿½Nï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½v5000ï¿½Èï¿½ÌŒ^ï¿½ï¿½ï¿½ï¿½ï¿½cï¿½ï¿½
 
-lr = ct10000/pt10000 # Œ^E’nˆæ–ˆ‚Ì‘¹ŠQ—¦
+lr = ct10000/pt10000 # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½
 
-image(lr,xlab="Œ^",ylab="’nˆæ",breaks=0:12/10) # Œ^E’nˆæ–ˆ‚Ì‘¹ŠQ—¦‚Ìƒq[ƒgƒ}ƒbƒv
+image(lr,xlab="ï¿½^",ylab="ï¿½nï¿½ï¿½",breaks=0:12/10) # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½Ìƒqï¿½[ï¿½gï¿½}ï¿½bï¿½v
 
 
-wt = ifelse(is.na(pt10000),0,pt10000) # •ªÍ‚É—p‚¢‚éd‚İ
+wt = ifelse(is.na(pt10000),0,pt10000) # ï¿½ï¿½ï¿½Í‚É—pï¿½ï¿½ï¿½ï¿½dï¿½ï¿½
 cmf=CMF(lr,k=1,weight=wt,lambda=1000000)
 
 A=cmf$matrices$A
@@ -31,20 +32,20 @@ ub=cmf$matrices$user_bias
 ib=cmf$matrices$item_bias
 mu=cmf$matrices$glob_mean
 
-lrpred = mu + ub%o%rep(1,ncol(lr)) + rep(1,nrow(lr))%o%ib + t(A)%*%B # Œ^E’nˆæ–ˆ‚Ì‘¹ŠQ—¦‚Ì—\‘ª’l
+lrpred = mu + ub%o%rep(1,ncol(lr)) + rep(1,nrow(lr))%o%ib + t(A)%*%B # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½Ì—\ï¿½ï¿½ï¿½l
 
-image(lrpred,xlab="Œ^",ylab="’nˆæ",breaks=0:12/10) # Œ^E’nˆæ–ˆ‚Ì‘¹ŠQ—¦‚Ì—\‘ª’l‚Ìƒq[ƒgƒ}ƒbƒv
+image(lrpred,xlab="ï¿½^",ylab="ï¿½nï¿½ï¿½",breaks=0:12/10) # ï¿½^ï¿½Eï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½Ì—\ï¿½ï¿½ï¿½lï¿½Ìƒqï¿½[ï¿½gï¿½}ï¿½bï¿½v
 
 areas = data.frame(area = colnames(lr), ib = ib, B = c(B), lr = colSums(ct,na.rm=T)/colSums(pt,na.rm=T))
 
-ggplot(areas,aes(x=area,y=ib,col=area)) + geom_point() # ’nˆæ–ˆ‚Ì‘¹ŠQ—¦iåŒø‰Êj‚ğ}¦
+ggplot(areas,aes(x=area,y=ib,col=area)) + geom_point() # ï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½iï¿½ï¿½ï¿½ï¿½Êjï¿½ï¿½}ï¿½ï¿½
 
-ggplot(areas,aes(x=area,y=B,col=area)) + geom_point() # ’nˆæ–ˆ‚Ì‘¹ŠQ—¦iŒğŒİì—p•”•ªj‚ğ}¦
+ggplot(areas,aes(x=area,y=B,col=area)) + geom_point() # ï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½iï¿½ï¿½ï¿½İï¿½pï¿½ï¿½ï¿½ï¿½ï¿½jï¿½ï¿½}ï¿½ï¿½
 
-ggplot(areas,aes(x=area,y=lr,col=area)) + geom_point() # ’nˆæ–ˆ‚Ì‘¹ŠQ—¦ÀÑ‚ğ}¦
+ggplot(areas,aes(x=area,y=lr,col=area)) + geom_point() # ï¿½nï¿½æ–ˆï¿½Ì‘ï¿½ï¿½Qï¿½ï¿½ï¿½ï¿½ï¿½Ñ‚ï¿½}ï¿½ï¿½
 
 
 # To Do
-# EŒğ·ŒŸØ‚Åk(“ÁˆÙƒxƒNƒgƒ‹‚Ìg—p”)‚âlambda(L2³‘¥‰»ƒpƒ‰ƒ[ƒ^)‚ğ’²®‚µA—\‘ª¸“x‚ğŒŸØ
-# Eˆê•”‚Ì—\‘ª’l‚ªƒ}ƒCƒiƒXi‘¹ŠQ—¦‚È‚Ì‚Éj‚Æ‚È‚Á‚Ä‚µ‚Ü‚¤‚Ì‚ÅAê‡‚É‚æ‚Á‚Ä‚Í‘Î”•ÏŠ·‚àŒŸ“¢
+# ï¿½Eï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø‚ï¿½k(ï¿½ï¿½ï¿½Ùƒxï¿½Nï¿½gï¿½ï¿½ï¿½Ìgï¿½pï¿½ï¿½)ï¿½ï¿½lambda(L2ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½pï¿½ï¿½ï¿½ï¿½ï¿½[ï¿½^)ï¿½ğ’²ï¿½ï¿½ï¿½ï¿½Aï¿½\ï¿½ï¿½ï¿½ï¿½ï¿½xï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+# ï¿½Eï¿½ê•”ï¿½Ì—\ï¿½ï¿½ï¿½lï¿½ï¿½ï¿½}ï¿½Cï¿½iï¿½Xï¿½iï¿½ï¿½ï¿½Qï¿½ï¿½ï¿½È‚Ì‚Éjï¿½Æ‚È‚ï¿½ï¿½Ä‚ï¿½ï¿½Ü‚ï¿½ï¿½Ì‚ÅAï¿½ê‡ï¿½É‚ï¿½ï¿½ï¿½Ä‚Í‘Îï¿½ï¿½ÏŠï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
