@@ -4,7 +4,7 @@ library(cmfrec)
 library(ggplot2)
 
 # library(CASdatasets)
-# cas_dataset_path <- "/Users/nanakato/projects/CASdatasets/data"
+# cas_dataset_path = "/Users/nanakato/projects/CASdatasets/data"
 #
 # load(paste(cas_dataset_path, "brvehins1a.rda", sep="/"))
 # load(paste(cas_dataset_path, "brvehins1b.rda", sep="/"))
@@ -12,9 +12,9 @@ library(ggplot2)
 # load(paste(cas_dataset_path, "brvehins1d.rda", sep="/"))
 # load(paste(cas_dataset_path, "brvehins1e.rda", sep="/"))
 #
-# brvehins <- rbind(brvehins1a, brvehins1b, brvehins1c, brvehins1d, brvehins1e)
+# brvehins = rbind(brvehins1a, brvehins1b, brvehins1c, brvehins1d, brvehins1e)
 # write.csv(brvehins, file="brvehins.csv")
-brvehins <- read.csv("data/brvehins.csv")
+brvehins = read.csv("data/brvehins.csv")
 
 # > str(brvehins)
 # 'data.frame':	1965355 obs. of  24 variables:
@@ -43,12 +43,14 @@ brvehins <- read.csv("data/brvehins.csv")
 #  $ ClaimAmountFire    : int  0 0 0 0 0 0 0 0 0 0 ...
 #  $ ClaimAmountOther   : int  0 0 0 0 0 120 0 0 0 0 ...
 
-pt <- tapply(brvehins$PremTotal, list(brvehins$VehModel,brvehins$Area), sum) # 型・地域毎の保険料の集計
-ct <- tapply(rowSums(brvehins[,19:23]), list(brvehins$VehModel,brvehins$Area), sum) # 型・地域毎のクレーム総額の集計
+premium_total = tapply(brvehins$PremTotal, list(brvehins$VehModel,brvehins$Area), sum) # 型・地域毎の保険料の集計
+claim_total = tapply(rowSums(brvehins[,19:23]), list(brvehins$VehModel,brvehins$Area), sum) # 型・地域毎のクレーム総額の集計
 
-# > dim(pt)
+
+
+# > dim(premium_total)
 # [1] 4259   40
-# > dim(ct)
+# > dim(claim_total)
 # [1] 4259   40
 
 # memo:
@@ -56,38 +58,68 @@ ct <- tapply(rowSums(brvehins[,19:23]), list(brvehins$VehModel,brvehins$Area), s
 
 # 料率区分が細かいとき、欠測が出たりふつうにあるし実績が安定しない。交互作用なんてみてられない。
 
-pt10000 <- pt[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # 保険料計10000以上、クレーム総額計5000以上の型だけ残す
-ct10000 <- ct[rowSums(pt,na.rm=T)>=10000 & rowSums(ct,na.rm=T)>=5000,] # 保険料計10000以上、クレーム総額計5000以上の型だけ残す
+# 保険料計10000以上、クレーム総額計5000以上の型だけ残す
+premium_total_10000 = premium_total[rowSums(premium_total,na.rm=T)>=10000 & rowSums(claim_total,na.rm=T)>=5000,]
+claim_total_10000 = claim_total[rowSums(premium_total,na.rm=T)>=10000 & rowSums(claim_total,na.rm=T)>=5000,]
 
-lr <- ct10000/pt10000 # 型・地域毎の損害率
+premium_total_10000[is.na(premium_total_10000)] = 0 # added
+claim_total_10000[is.na(claim_total_10000)] = 0 # added
 
-image(lr,xlab="�^",ylab="�n��",breaks=0:12/10) # 型・地域毎の損害率のヒートマップ
+loss_ratio = claim_total_10000 / premium_total_10000 # 型・地域毎の損害率
+loss_ratio[premium_total_10000==0] = NA # added
 
-wt = ifelse(is.na(pt10000),0,pt10000) # ���͂ɗp����d��
-cmf=CMF(lr,k=1,weight=wt,lambda=1000000)
+# write.csv(loss_ratio, file="data/loss_ratio.csv")
+# > dim(lr)
+# [1] 2517   40
 
-A=cmf$matrices$A
-B=cmf$matrices$B
-ub=cmf$matrices$user_bias
-ib=cmf$matrices$item_bias
-mu=cmf$matrices$glob_mean
 
-lrpred = mu + ub%o%rep(1,ncol(lr)) + rep(1,nrow(lr))%o%ib + t(A)%*%B # �^�E�n�斈�̑��Q���̗\���l
+# premium = ifelse(is.na(premium_total_10000),0, premium_total_10000) # weight
+# > wt = ifelse(is.na(pt10000),0,pt10000) # weight
+# > dim(wt)
+# [1] 2517   40
 
-image(lrpred,xlab="�^",ylab="�n��",breaks=0:12/10) # �^�E�n�斈�̑��Q���̗\���l�̃q�[�g�}�b�v
+# cmf = CMF_implicit(
+#   X=loss_ratio,
+#   # k=1,
+#   # weight=premium,
+#   # lambda=1000000,
+# )
 
-areas = data.frame(area = colnames(lr), ib = ib, B = c(B), lr = colSums(ct,na.rm=T)/colSums(pt,na.rm=T))
+cmf = CMF(
+  X=loss_ratio,
+  k=1,
+  weight=premium_total_10000,
+  lambda=1000000,
+)
 
-ggplot(areas,aes(x=area,y=ib,col=area)) + geom_point() # �n�斈�̑��Q���i����ʁj��}��
+A = cmf$matrices$A
+B = cmf$matrices$B
+type_bias = cmf$matrices$user_bias
+region_bias = cmf$matrices$item_bias
+mu = cmf$matrices$glob_mean
 
-ggplot(areas,aes(x=area,y=B,col=area)) + geom_point() # �n�斈�̑��Q���i���ݍ�p�����j��}��
+# 型・地域毎の損害率の予測値
+pred_loss_ratio = mu + type_bias%o%rep(1, ncol(loss_ratio)) + rep(1,nrow(loss_ratio))%o%region_bias + t(A)%*%B
 
-ggplot(areas,aes(x=area,y=lr,col=area)) + geom_point() # �n�斈�̑��Q�����т�}��
+# 型・地域毎の損害率の予測値のヒートマップ
+image(pred_loss_ratio, xlab="type", ylab="region", breaks=0:12/10)
+image(loss_ratio, xlab="type",ylab="region",breaks=0:12/10) # 型・地域毎の損害率のヒートマップ
+
+areas = data.frame(
+  area = colnames(loss_ratio),
+  region_bias = region_bias,
+  B = c(B),
+  lr = colSums(claim_total,na.rm=T)/colSums(premium_total,na.rm=T),
+)
+
+ggplot(areas,aes(x=area,y=region_bias,col=area)) + geom_point() # 地域毎の損害率（主効果）を図示
+ggplot(areas,aes(x=area,y=B,col=area)) + geom_point() # 地域毎の損害率（交互作用部分）を図示
+ggplot(areas,aes(x=area,y=lr,col=area)) + geom_point() #地域毎の損害率実績を図示
 
 
 # To Do
-# �E�������؂�k(���كx�N�g���̎g�p��)��lambda(L2�������p�����[�^)�𒲐����A�\�����x������
-# �E�ꕔ�̗\���l���}�C�i�X�i���Q���Ȃ̂Ɂj�ƂȂ��Ă��܂��̂ŁA�ꍇ�ɂ���Ă͑ΐ��ϊ�������
+# ・交差検証でk(特異ベクトルの使用数)やlambda(L2正則化パラメータ)を調整し、予測精度を検証
+# ・一部の予測値がマイナス（損害率なのに）となってしまうので、場合によっては対数変換も検討
 
 
 
