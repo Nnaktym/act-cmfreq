@@ -43,6 +43,27 @@ loss_ratio_cvtrain[premium_total_cvtrain==0] = NA
 loss_ratio_cvtest = claim_total_cvtest / premium_total_cvtest # ?^?E?n?斈????Q??
 loss_ratio_cvtest[premium_total_cvtest==0] = NA 
 
+
+# The main function in the library is CMF, which can fit many variations of the model described above
+# under different settings (e.g. whether entries missing in a sparse matrix are to be taken as zeros or
+# ignored in the objective function, whether to apply centering, to including row/column intercepts,
+# which kind of regularization to apply, etc.).
+# A specialized function for implicit-feedback models is also available under CMF_implicit, which
+# provides more appropriate defaults for such data.
+
+# The documentation and function namings use the following naming conventions:
+# • About data:
+# – ’X’ -> data about interactions between users/rows and items/columns (e.g. ratings given
+# by users to items).
+# – ’U’ -> data about user/row attributes (e.g. user’s age).
+# – ’I’ -> data about item/column attributes (e.g. a movie’s genre).
+# • About functionalities:
+# – ’warm’ -> predictions based on new, unseen ’X’ data, and potentially including new ’U’
+# data along.
+# – ’cold’ -> predictions based on new user attributes data ’U’, without ’X’.
+# – ’new’ -> predictions about new items based on attributes data ’I’.
+
+
 # ???????
 cmf = CMF( # <----- ???????????????F?X??????
   X=loss_ratio_cvtrain,
