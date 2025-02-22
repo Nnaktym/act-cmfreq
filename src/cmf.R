@@ -118,7 +118,7 @@ calc_rmse <- function(pred, act, show = TRUE) {
     #' @param pred The predicted values.
     #' @param act The actual values.
     #' @return The RMSE.
-    rmse <- sqrt(mean((na.omit(as.vector(pred)) - na.omit(as.vector(X_test)))^2))
+    rmse <- sqrt(mean((na.omit(as.vector(pred)) - na.omit(as.vector(act)))^2))
     if (show) {
         cat(sprintf("RMSE : %.4f\n", rmse))
     }
@@ -137,13 +137,13 @@ optimize_params <- function(X, n_folds, k_values, lambda_values) {
     for (k in k_values) {
         for (lambda in lambda_values) {
             cv_score <- 0
-            for (i in 1:N_FOLDS) {
+            for (i in 1:n_folds) {
                 X_train <- cv_split$folds[[i]]$train
                 X_val <- cv_split$folds[[i]]$val
                 cmf_args <- list(X = X_train, k = k, lambda = lambda, niter = 30, nonneg = TRUE, verbose = FALSE)
                 model <- do.call(CMF, cmf_args)
                 pred <- get_prediction(model, X_val)
-                cv_score <- cv_score + calc_rmse(pred, X_val, show = FALSE) / N_FOLDS
+                cv_score <- cv_score + calc_rmse(pred, X_val, show = FALSE) / n_folds
             }
             print(paste("k:", k, "lambda:", lambda, "CV RMSE:", cv_score))
             cv_result <- rbind(cv_result, c(k, lambda, cv_score))
