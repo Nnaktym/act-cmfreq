@@ -83,6 +83,20 @@ fill_with_na <- function(df, threshold) {
     return(df)
 }
 
+wide_to_long_format <- function(wide_format_data, value_names = c("var1", "var2", "value"), na_omit = TRUE) {
+    #' Convert wide format data to long format
+    #'
+    #' @param wide_format_data The input data in wide format.
+    #' @param value_names The names of the columns in the long format.
+    #' @param na_omit Whether to omit NA values.
+    long_format_data <- melt(wide_format_data)
+    if (na_omit) {
+        long_format_data <- na.omit(long_format_data)
+    }
+    colnames(long_format_data) <- value_names
+    return(long_format_data)
+}
+
 get_total <- function(data, category_to_analyze, aggregate_col, threshold = NA) {
     #' Get total of aggregate_col by category_to_analyze
     #'
