@@ -170,18 +170,40 @@ optimize_params <- function(X, n_folds, k_values, lambda_values, random_seed = 1
     return(best_params)
 }
 
-visualize_heatmap <- function(data) {
+visualize_scatter_plot <- function(actual, pred, model_name, max_lim = 2500) {
+    #' Visualize a scatter plot of predicted vs. true values
+    #'
+    #' @param pred The predicted values.
+    #' @param actual The actual values.
+    #' @param model_name The name of the model.
+    #' @param max_lim The maximum limit for the x and y axes.
+    df <- data.frame(as.vector(actual), as.vector(pred))
+    df <- na.omit(df)
+    colnames(df) <- c("actual", "prediction")
+    title_text <- paste("predicted vs. true values (", model_name, ")", sep = "")
+    p <- ggplot(df, aes(x = actual, y = prediction)) +
+        geom_point() +
+        geom_abline(intercept = 0, slope = 1, color = "red") +
+        xlim(0, max_lim) +
+        ylim(0, max_lim) +
+        labs(title = title_text, x = "True values", y = "Predicted values")
+    return(p)
+}
+
+visualize_heatmap <- function(data, title = "", max_limit = 5000) {
     #' Visualize a heatmap of the data
     #'
     #' @param data A matrix of data to visualize
+    #' @param max_limit The maximum limit for the color scale
     #' @return A ggplot2 object
     data_matrix <- as.matrix(data)
     p <- ggplot(data = melt(data_matrix), aes(x = Var2, y = Var1, fill = value)) +
         geom_tile() +
-        scale_fill_viridis(na.value = "white", limits = c(0, 10000)) +
+        scale_fill_viridis(na.value = "white", limits = c(0, max_limit)) +
         theme_minimal() +
         theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-        labs(x = "Category", y = "Model", fill = "Pure Premium")
+        labs(x = "Category", y = "Model", fill = "Pure Premium") +
+        ggtitle(title)
 
     return(p)
 }
