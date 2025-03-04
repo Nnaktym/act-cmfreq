@@ -139,13 +139,14 @@ calc_rmse <- function(pred, act, show = TRUE) {
     return(rmse)
 }
 
-optimize_params <- function(X, n_folds, k_values, lambda_values) {
+optimize_params <- function(X, n_folds, k_values, lambda_values, random_seed = 123) {
     #' Optimize the hyper parameters for the CMF model using cross-validation.
     #'
     #' @param X The input matrix.
     #' @param n_folds The number of folds for cross-validation.
     #' @param k_values The list of k values to try.
     #' @param lambda_values The list of lambda values to try.
+    set.seed(random_seed)
     cv_split <- k_fold_split(X, k = n_folds)
     cv_result <- NULL
     for (k in k_values) {
