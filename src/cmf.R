@@ -83,6 +83,20 @@ fill_with_na <- function(df, threshold) {
     return(df)
 }
 
+wide_to_long_format <- function(wide_format_data, value_names = c("var1", "var2", "value"), na_omit = TRUE) {
+    #' Convert wide format data to long format
+    #'
+    #' @param wide_format_data The input data in wide format.
+    #' @param value_names The names of the columns in the long format.
+    #' @param na_omit Whether to omit NA values.
+    long_format_data <- melt(wide_format_data)
+    if (na_omit) {
+        long_format_data <- na.omit(long_format_data)
+    }
+    colnames(long_format_data) <- value_names
+    return(long_format_data)
+}
+
 get_total <- function(data, category_to_analyze, aggregate_col, threshold = NA) {
     #' Get total of aggregate_col by category_to_analyze
     #'
@@ -125,13 +139,14 @@ calc_rmse <- function(pred, act, show = TRUE) {
     return(rmse)
 }
 
-optimize_params <- function(X, n_folds, k_values, lambda_values) {
+optimize_params <- function(X, n_folds, k_values, lambda_values, random_seed = 123) {
     #' Optimize the hyper parameters for the CMF model using cross-validation.
     #'
     #' @param X The input matrix.
     #' @param n_folds The number of folds for cross-validation.
     #' @param k_values The list of k values to try.
     #' @param lambda_values The list of lambda values to try.
+    set.seed(random_seed)
     cv_split <- k_fold_split(X, k = n_folds)
     cv_result <- NULL
     for (k in k_values) {
@@ -155,18 +170,40 @@ optimize_params <- function(X, n_folds, k_values, lambda_values) {
     return(best_params)
 }
 
-visualize_heatmap <- function(data) {
+visualize_scatter_plot <- function(actual, pred, model_name, max_lim = 2500) {
+    #' Visualize a scatter plot of predicted vs. true values
+    #'
+    #' @param pred The predicted values.
+    #' @param actual The actual values.
+    #' @param model_name The name of the model.
+    #' @param max_lim The maximum limit for the x and y axes.
+    df <- data.frame(as.vector(actual), as.vector(pred))
+    df <- na.omit(df)
+    colnames(df) <- c("actual", "prediction")
+    title_text <- paste("predicted vs. true values (", model_name, ")", sep = "")
+    p <- ggplot(df, aes(x = actual, y = prediction)) +
+        geom_point() +
+        geom_abline(intercept = 0, slope = 1, color = "red") +
+        xlim(0, max_lim) +
+        ylim(0, max_lim) +
+        labs(title = title_text, x = "True values", y = "Predicted values")
+    return(p)
+}
+
+visualize_heatmap <- function(data, title = "", max_limit = 5000) {
     #' Visualize a heatmap of the data
     #'
     #' @param data A matrix of data to visualize
+    #' @param max_limit The maximum limit for the color scale
     #' @return A ggplot2 object
     data_matrix <- as.matrix(data)
     p <- ggplot(data = melt(data_matrix), aes(x = Var2, y = Var1, fill = value)) +
         geom_tile() +
-        scale_fill_viridis(na.value = "white", limits = c(0, 10000)) +
+        scale_fill_viridis(na.value = "white", limits = c(0, max_limit)) +
         theme_minimal() +
         theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-        labs(x = "Category", y = "Model", fill = "Pure Premium")
+        labs(x = "Category", y = "Model", fill = "Pure Premium") +
+        ggtitle(title)
 
     return(p)
 }
