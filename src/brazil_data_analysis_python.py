@@ -72,7 +72,7 @@ if __name__ == "__main__":
     original_data_path = "data/brvehins_org.csv"  # from brazil_data_analysis_R.ipynb
     population_density_path = "data/brazil_population_density.csv"
     pop_density_quantile = 0.7
-    k = 20  # number of latent factors
+    k = 50  # number of latent factors
     lambda_ = 10  # regularization parameter
 
     cols_to_use = ["VehModel", "Area", "pure_premium"]
