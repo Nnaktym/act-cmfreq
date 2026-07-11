@@ -1,3 +1,12 @@
+> **⚠️ HISTORICAL / SUPERSEDED (2026-07-11).** This report checked whether the
+> original **R notebook** matched the paper *before* the review revisions. Its
+> headline gap — "the 3 methods are not evaluated on the same test set" — has
+> since been **fixed**: the analysis is now in Python
+> (`src/brazil_data_analysis_R.py` + `src/glmm_pymc.py`), MF/GLM/GLMM are scored
+> on one identical hold-out set with exposure-weighted metrics, and the paper was
+> revised accordingly. See the repository `README.md` for the current state and
+> findings. This document is retained only as a record of the pre-revision review.
+
 # Notebook ↔ 論文 対応確認レポート
 
 **対象論文:** `paper/ICA2026_Matrix_Factorization_for_Class_Ratemaking.md`
