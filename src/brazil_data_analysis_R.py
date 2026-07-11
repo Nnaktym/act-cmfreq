@@ -478,6 +478,104 @@ def main():
                       "pred: MF (weighted)", fig_path=f"{FIG_DIR}/heatmap_mf.png")
 
     # -------------------------------------------------------------------------
+    # 7. 論文用の図を生成  (Regenerate the paper's Figures 4.2.1 .. 4.5.2)
+    # -------------------------------------------------------------------------
+    # These overwrite paper/fig_*.png so the paper reflects THIS (Python,
+    # exposure-weighted) analysis as the single source of truth. GLM and GLMM
+    # are refit here on ALL observed cells, matching the paper's final figures.
+    PAPER = "paper"
+
+    def _to_df(mat):
+        return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
+
+    # Fig 4.2.1 -- actual claim costs
+    visualize_heatmap(pure_premium,
+                      "Actual Claim Costs by Vehicle Model and Region",
+                      fig_path=f"{PAPER}/fig_4_2_1.png")
+
+    # Fig 4.5.1 -- MF predicted vs. true (hold-out cells) ; 4.5.2 -- MF all cells
+    visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
+                           fig_path=f"{PAPER}/fig_4_5_1.png")
+    visualize_heatmap(_to_df(estimated_mf),
+                      "Estimated Pure Premium Rates (Matrix Factorization)",
+                      fig_path=f"{PAPER}/fig_4_5_2.png")
+
+    # ---- full-data GLM & GLMM (for the GLM/GLMM heatmaps) ------------------
+    obs_r, obs_c = np.where(obs_cells)
+    full_long = pd.DataFrame({
+        "VehModel": models[obs_r], "Area": areas[obs_c],
+        "pure_premium": pp_mat[obs_r, obs_c], "exposure": exp_mat[obs_r, obs_c],
+    })
+    full_long["claim"] = full_long["pure_premium"] * full_long["exposure"]
+    _lem_f = float(np.log(full_long["exposure"]).mean())
+    full_long["log_exposure"] = np.log(full_long["exposure"]) - _lem_f  # for GLMM
+    full_long["interaction"] = (full_long["VehModel"].astype(str) + "." +
+                                full_long["Area"].astype(str))
+
+    glm_f = smf.glm("claim ~ C(VehModel) + C(Area)", data=full_long,
+                    family=sm.families.Poisson(),
+                    offset=np.log(full_long["exposure"])).fit()
+
+    # Fig 4.3.2 -- GLM on observed cells only (white = missing)
+    glm_obs = (glm_f.predict(full_long, offset=np.log(full_long["exposure"]))
+               / full_long["exposure"]).to_numpy()
+    g_obs = np.full(pp_mat.shape, np.nan)
+    g_obs[obs_r, obs_c] = glm_obs
+    visualize_heatmap(_to_df(g_obs),
+                      "Estimated Pure Premium Rates -- GLM (white = missing)",
+                      fig_path=f"{PAPER}/fig_4_3_2.png")
+
+    # Fig 4.3.1 -- GLM extrapolated to ALL cells (main-effects extrapolation).
+    # A cell is predictable only if BOTH its vehicle model and its area appear
+    # in the observed data (a completely-unobserved category has no GLM level);
+    # such cells stay white, matching the paper's note on absent categories.
+    gm = np.repeat(np.arange(len(models)), len(areas))
+    ga = np.tile(np.arange(len(areas)), len(models))
+    all_long = pd.DataFrame({"VehModel": models[gm], "Area": areas[ga]})
+    all_exp = exp_mat[gm, ga]
+    all_long["exposure"] = np.where(np.isnan(all_exp), 1.0, all_exp)
+    known_m = set(full_long["VehModel"].unique())
+    known_a = set(full_long["Area"].unique())
+    predictable = (all_long["VehModel"].isin(known_m) &
+                   all_long["Area"].isin(known_a)).to_numpy()
+    glm_all_flat = np.full(len(all_long), np.nan)
+    if predictable.any():
+        pr = (glm_f.predict(all_long[predictable],
+                            offset=np.log(all_long.loc[predictable, "exposure"]))
+              / all_long.loc[predictable, "exposure"]).to_numpy()
+        glm_all_flat[predictable] = pr
+    glm_all = glm_all_flat.reshape(len(models), len(areas))
+    visualize_heatmap(_to_df(glm_all),
+                      "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
+                      fig_path=f"{PAPER}/fig_4_3_1.png")
+
+    # ---- GLMM on observed cells (reverts to main effects for missing) ------
+    glmm_obs_grid = g_obs  # fallback default
+    try:
+        glmm_f = PoissonBayesMixedGLM.from_formula(
+            "claim ~ C(VehModel) + C(Area) + log_exposure",
+            {"interaction": "0 + C(interaction)"}, full_long).fit_map()
+        lp_f = np.asarray(glmm_f.model.exog @ glmm_f.fe_mean
+                          + glmm_f.model.exog_vc @ glmm_f.vc_mean).ravel()
+        glmm_obs = np.exp(lp_f) / full_long["exposure"].to_numpy()
+        if np.all(np.isfinite(glmm_obs)) and glmm_obs.max() < 1e6:
+            grid = np.full(pp_mat.shape, np.nan)
+            grid[obs_r, obs_c] = glmm_obs
+            glmm_obs_grid = grid
+        else:
+            print("WARN: full-data GLMM unstable; using GLM heatmap for GLMM figures")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: full-data GLMM failed ({exc}); using GLM heatmap for GLMM figures")
+
+    # Fig 4.4.1 / 4.4.2 -- GLMM observed cells (extrapolation to missing omitted)
+    visualize_heatmap(_to_df(glmm_obs_grid),
+                      "Estimated Pure Premium Rates -- GLMM (observed cells)",
+                      fig_path=f"{PAPER}/fig_4_4_1.png")
+    visualize_heatmap(_to_df(glmm_obs_grid),
+                      "Estimated Pure Premium Rates -- GLMM (white = missing)",
+                      fig_path=f"{PAPER}/fig_4_4_2.png")
+
+    # -------------------------------------------------------------------------
     # Summary
     # -------------------------------------------------------------------------
     print("\n================ SUMMARY ================")
