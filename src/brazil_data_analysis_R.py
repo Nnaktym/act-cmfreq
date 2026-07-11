@@ -25,9 +25,14 @@ Differences from the R version (numbers differ by design):
     R script writes) instead of the CASdatasets .rda files.
   * R and Python RNGs differ, so the split, CV folds, and chosen (k, lambda)
     won't match R to the decimal.
-  * GLMM: statsmodels' PoissonBayesMixedGLM (variational Bayes) has no offset, so
-    log(exposure) enters as a fixed covariate -- an exposure-aware substitute for
-    R's lme4::glmer offset. Point estimates are close, not identical.
+  * GLMM: statsmodels' PoissonBayesMixedGLM has no offset, so log(exposure) enters
+    as a fixed covariate -- an exposure-aware substitute for R's lme4::glmer offset.
+    The interaction random effect is per observed cell (observation-level), which
+    makes the fit saturated; the MAP/Laplace optimiser may not fully converge, so
+    only the point predictions are used (they revert to main effects out-of-sample,
+    exactly the GLMM limitation the paper describes). For a production-grade,
+    fully-converged GLMM, fit with R's lme4::glmer. Point estimates are close,
+    not identical, to that reference.
 
 Dependencies: pandas, numpy, matplotlib, cmfrec, statsmodels
   pip install cmfrec statsmodels
@@ -216,7 +221,7 @@ def visualize_scatter_plot(actual, pred, model_name, max_lim=2500, fig_path=None
     plt.ylabel("Predicted values")
     plt.title(f"predicted vs. true values ({model_name})")
     if fig_path:
-        plt.savefig(fig_path, bbox_inches="tight")
+        plt.savefig(fig_path, bbox_inches="tight", dpi=300)
         print(f"saved {fig_path}")
     plt.close()
 
@@ -237,7 +242,7 @@ def visualize_heatmap(data, title="", max_limit=5000, fig_path=None):
         plt.xticks(range(mat.shape[1]), list(data.columns), rotation=45, ha="right",
                    fontsize=6)
     if fig_path:
-        plt.savefig(fig_path, bbox_inches="tight")
+        plt.savefig(fig_path, bbox_inches="tight", dpi=300)
         print(f"saved {fig_path}")
     plt.close()
 

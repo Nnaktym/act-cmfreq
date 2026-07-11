@@ -49,7 +49,7 @@ One widely used alternative is the Generalized Linear Mixed Model (GLMM), which 
 
 Generalized Linear Models (GLMs) have been widely utilized for calculating class rates. A GLM generalizes linear regression by allowing for flexible error structures and link functions. By relating the expected value of the response variable E[Y] to a linear combination of explanatory variables Xi via a link function g(∙), the model is expressed as follows:
 
-g(EY  X1, X2, …, Xp])=* *β0+β1X1+β2X2+⋯+βpXp
+$$g\!\left(E[Y \mid X_1, X_2, \ldots, X_p]\right) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \cdots + \beta_p X_p$$
 
 Y: Response variable (e.g., claim frequency, claim severity, loss ratio)
 
@@ -59,11 +59,11 @@ Y: Response variable (e.g., claim frequency, claim severity, loss ratio)
 
 -  X1,⋯Xp: Explanatory variables (e.g., age, gender, vehicle manufacturer, region, mileage) 
 
-GLMs can incorporate interactions and non-linear relationships between explanatory variables. For instance, the combination of age and mileage may have an effect that differs from considering each factor in isolation. In such cases, the relationship can be captured by adding an interaction term XiXj as an explanatory variable:
+GLMs can incorporate interactions and non-linear relationships between explanatory variables. For instance, the combination of age and mileage may have an effect that differs from considering each factor in isolation. In such cases, the relationship can be captured by adding an interaction term $X_i X_j$ as an explanatory variable:
 
-g(EY  X1, X2, …, Xp])=* *β0+β1X1+β2X2+⋯+βpXp+i=1p-1j=i+1pβijXiXj
+$$g\!\left(E[Y \mid X_1, X_2, \ldots, X_p]\right) = \beta_0 + \sum_{i=1}^{p} \beta_i X_i + \sum_{i=1}^{p-1}\sum_{j=i+1}^{p} \beta_{ij} X_i X_j$$
 
-Here, βij represents the regression coefficient for the interaction between Xi and Xj. Additionally, if the response variable increases non-linearly with an explanatory variable, higher-order terms such as a quadratic term Xi2 can be added.
+Here, βij represents the regression coefficient for the interaction between Xi and Xj. Additionally, if the response variable increases non-linearly with an explanatory variable, higher-order terms such as a quadratic term $X_i^2$ can be added.
 
    However, when variables have many categories, these interaction terms significantly increase model complexity, leading to issues with interpretability and stability. For example, consider a categorical variable like "vehicle manufacturer" with hundreds or thousands of categories. If we consider the interaction between this and another categorical variable (e.g., region), the number of possible combinations becomes enormous. Explicitly including all such interaction terms in a GLM leads to the following problems:
 
@@ -81,9 +81,9 @@ To address the limitations of GLMs—particularly the issues of over-parameteriz
 
 Mathematically, by incorporating random effects corresponding to specific category levels, the model can be expressed by listing the individual variables as follows:
 
-g(EY  X1, X2, …, Xp,u1,u2, …,uq])=* *β0+β1X1+β2X2+⋯+βpXp+u1Z1+u2Z2+⋯+uqZq
+$$g\!\left(E[Y \mid X_1, \ldots, X_p, u_1, \ldots, u_q]\right) = \beta_0 + \sum_{i=1}^{p} \beta_i X_i + \sum_{l=1}^{q} u_l Z_l$$
 
-where u1,u2, …,uq represent the random effects assumed to follow a common distribution N(0,  δ2), and Z1,Z2, …,Zq are the dummy variables corresponding to the random effects. In the context of class ratemaking, fixed effects β1X1,β2X2,…,βpXp are typically used for standard explanatory variables, while random effects u1Z1,u2Z2,…,uqZq are introduced for high-cardinality factors and their interactions, such as vehicle manufacturer or region.
+where u1,u2, …,uq represent the random effects assumed to follow a common distribution $N(0, \delta^2)$, and Z1,Z2, …,Zq are the dummy variables corresponding to the random effects. In the context of class ratemaking, fixed effects β1X1,β2X2,…,βpXp are typically used for standard explanatory variables, while random effects u1Z1,u2Z2,…,uqZq are introduced for high-cardinality factors and their interactions, such as vehicle manufacturer or region.
 
 The main advantage of introducing random effects lies in their inherent partial pooling mechanism. When data for specific category combinations are scarce or missing, GLMMs assume that the random effects for these combinations are drawn from a common distribution. This distributional assumption naturally shrinks weak or unsupported interaction terms toward zero, reducing overfitting and improving stability.
 
@@ -101,7 +101,7 @@ Matrix factorization (MF) is a technique originally developed in the fields of r
 
 SVD is a method that decomposes an observed matrix X as follows:
 
-X≈UΣVT
+$$X \approx U \Sigma V^{\top}$$
 
 In this equation, U is an orthogonal matrix of left singular vectors, Σ is a diagonal matrix containing singular values, and V is an orthogonal matrix of right singular vectors. In recommender systems, we limit the rank of Σ (the number of non-zero diagonal elements) to a value much smaller than m or n. This allows us to map the observed matrix X into a low-dimensional latent factor space to learn user preferences.
 
@@ -111,7 +111,7 @@ In this equation, U is an orthogonal matrix of left singular vectors, Σ is a di
 
 NMF is a technique that factorizes a non-negative observation matrix X as follows:
 
-X≈ABT
+$$X \approx A B^{\top}$$
 
    In this formulation, A and B are non-negative matrices with a small number of columns, representing the latent factors of users and items, respectively. Within the context of recommendation systems, A represents user features while B represents item features; their product is utilized to predict user preferences. A key characteristic of NMF is that the latent factor matrices A and B are constrained to non-negative values and often contain many zeros. This distinct contrast between zero and non-zero elements enhance the interpretability of the estimation results.
 
@@ -123,11 +123,11 @@ Research on the application of matrix factorization to premium rating has also b
 
    In this study, we propose an approach that directly applies matrix factorization to ratemaking. We utilize the following model, which further refines the non-negative matrix factorization model introduced in the previous section:
 
-X≈ABT+μ1m1nT+bA1nT+1mbBT
+$$X \approx A B^{\top} + \mu\, \mathbf{1}_m \mathbf{1}_n^{\top} + b_A \mathbf{1}_n^{\top} + \mathbf{1}_m b_B^{\top}$$
 
 Where A is an m×k matrix representing user latent factors, B is an n×k matrix representing item latent factors, μ is the global mean, and 1m, 1n are m and n dimensional vectors of ones. Furthermore, bA is an m dimensional vector representing user-specific biases, and bB is an n dimensional vector representing item-specific biases. The variables to be estimated in the above equation are the elements of A, B, bA, bB, and μ. These are estimated using the Alternating Least Squares (ALS) method under non-negativity constraints, with the addition of L2 regularization terms (penalty terms based on the sum of squares of each element). The optimization problem for parameter inference is formulated by
 
-minimizeA,B,bA,bB,μ  X-ABT+μ1m1nT+bA1nT+1mbBTF2+λAF2+BF2
+$$\min_{A,B,b_A,b_B,\mu}\; \left\lVert X - \left(A B^{\top} + \mu\, \mathbf{1}_m \mathbf{1}_n^{\top} + b_A \mathbf{1}_n^{\top} + \mathbf{1}_m b_B^{\top}\right) \right\rVert_F^2 + \lambda \left( \lVert A \rVert_F^2 + \lVert B \rVert_F^2 \right)$$
 
 s.t.  elements of A, B are all non-negative,
 
@@ -163,9 +163,9 @@ In actuarial practice, explicitly defining interaction terms for a vast number o
 
 Let Yij be the total claim amount for vehicle model i and area j, and Eij be the corresponding exposure. The model is defined as follows:
 
-Yij~Poisson(λijEij )
+$$Y_{ij} \sim \mathrm{Poisson}(\lambda_{ij} E_{ij})$$
 
-lnEYij =lnEij+ β0+ αi+ τj
+$$\ln E[Y_{ij}] = \ln E_{ij} + \beta_0 + \alpha_i + \tau_j$$
 
 Where:
 
@@ -203,11 +203,11 @@ Generalized Linear Mixed Model (GLMM) is an extension of the GLM that allows for
 
 The model is specified as follows:
 
-Yij~Poisson(λijEij )
+$$Y_{ij} \sim \mathrm{Poisson}(\lambda_{ij} E_{ij})$$
 
-lnEYij =lnEij+ β0+ αi+ τj+ zij
+$$\ln E[Y_{ij}] = \ln E_{ij} + \beta_0 + \alpha_i + \tau_j + z_{ij}$$
 
-Where zij~N(0,  δ2) represents the random effect for the interaction between vehicle model i and area j. The definitions of the other variables in the equation are the same as those described in Section 4.3.
+Where zij~$N(0, \delta^2)$ represents the random effect for the interaction between vehicle model i and area j. The definitions of the other variables in the equation are the same as those described in Section 4.3.
 
    The estimation results for the observed (non-missing) cells are shown in Figure 4.4.1 and 4.4.2. 
 
@@ -227,7 +227,7 @@ The characteristics of the estimation results are summarized below:
 
 		- Limitations Regarding Missing Values: A primary challenge of this approach is that the random effect zij is only estimable for observed combinations. For cells with zero exposure (missing data), the model lacks an empirical basis to predict the interaction, causing the estimate to revert to the main effects.
 
-		- Violation of Distributional Assumptions: The fundamental assumption that interaction effects across all regions and models follow a single normal distribution may be too restrictive. Real-world insurance risks often exhibit complex local clusters that a simple N(0,  δ2) assumption fails to capture accurately.
+		- Violation of Distributional Assumptions: The fundamental assumption that interaction effects across all regions and models follow a single normal distribution may be too restrictive. Real-world insurance risks often exhibit complex local clusters that a simple $N(0, \delta^2)$ assumption fails to capture accurately.
 
 		- Overall Effectiveness: Consequently, the GLMM approach is not particularly effective for datasets characterized by high sparsity, as it fails to provide reliable predictive power for the numerous missing category combinations where interaction effects are most needed.
 
