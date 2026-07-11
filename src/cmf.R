@@ -155,7 +155,7 @@ optimize_params <- function(X, n_folds, k_values, lambda_values, random_seed = 1
             for (i in 1:n_folds) {
                 X_train <- cv_split$folds[[i]]$train
                 X_val <- cv_split$folds[[i]]$val
-                cmf_args <- list(X = X_train, k = k, lambda = lambda, niter = 30, nonneg = TRUE, verbose = FALSE)
+                cmf_args <- list(X = X_train, k = k, lambda = lambda, niter = 30, nonneg = TRUE, verbose = FALSE, center = FALSE)
                 model <- do.call(CMF, cmf_args)
                 pred <- get_prediction(model, X_val)
                 cv_score <- cv_score + calc_rmse(pred, X_val, show = FALSE) / n_folds

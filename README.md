@@ -63,7 +63,13 @@ numbers won't match the R scripts to the decimal.
   held-out set of observed cells, with RMSE, exposure-weighted RMSE, and Poisson
   deviance side by side.
 - **No leakage.** The test set is held out *before* the CV grid search over
-  (k, λ). Tuning is exposure-weighted to match the final fit.
+  (k, λ). Tuning is exposure-weighted **and non-centered (`center=False`) to match
+  the final fit exactly** — otherwise the tuned λ would be calibrated for a
+  different (mean-centered) model than the one deployed.
+- **R scripts are historical/unweighted.** `cmf.R` / `brazil_data_analysis_R.R`
+  fit the MF *without* exposure weighting (no `W=`); the exposure-weighted
+  comparison the paper reports is the **Python** pipeline only. Treat the R files
+  as the earlier, unweighted reference implementation.
 - **GLMM.** `glmm_pymc.py` fits `Y_ij ~ Poisson(E_ij·exp(b0+α_i+τ_j+z_ij))`,
   `z_ij ~ N(0, σ²)` with pymc (non-centered, sum-to-zero main effects). The
   interaction variance σ is only weakly identified — one observation per
@@ -79,12 +85,20 @@ On the identical held-out cells, with exposure weighting applied consistently:
 | Model | RMSE | Exposure-weighted RMSE | Poisson deviance |
 |---|---:|---:|---:|
 | GLM (main effects) | 328.2 | 271.0 | 4.74×10⁶ |
-| GLMM (random interaction) | 347.6 | 294.9 | 5.93×10⁶ |
-| Matrix Factorization | 393.2 | 331.2 | 7.79×10⁶ |
+| GLMM (random interaction) | 328.2 | 271.0 | 4.74×10⁶ |
+| Matrix Factorization | 354.4 | 426.6 | 1.14×10⁷ |
+
+Selected hyperparameters: `k=3`, `λ=100` (strong regularization; the CV surface is
+nearly flat in `k`). The GLMM ties the GLM because every held-out cell is an
+unobserved interaction, so its random effect reverts to zero (this is the paper's
+GLMM limitation, shown numerically). Stratifying by exposure, MF is near-parity
+with the GLM in the **sparse** stratum (wRMSE 316.4 vs 310.3) but well behind on
+**dense** cells (441.5 vs 264.2).
 
 The main-effects GLM is most accurate on **observed** cells; MF is *competitive
-with*, not uniformly superior to, the conventional models there. Matrix
-factorization's distinctive value is **structural** — it produces
-interaction-aware estimates for the sparse and missing cells that the GLMM cannot
-resolve (it reverts to main effects) — rather than a uniform accuracy gain. See
-the paper's Section 4.6 and Conclusion for the full discussion.
+with*, not uniformly superior to, the conventional models there — and most
+competitive where exposure is thin. Matrix factorization's distinctive value is
+**structural** — it produces interaction-aware estimates for the sparse and
+missing cells that the GLMM cannot resolve (it reverts to main effects) — rather
+than a uniform accuracy gain. See the paper's Section 4.6 and Conclusion for the
+full discussion.

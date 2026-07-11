@@ -180,7 +180,7 @@ def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None
                 X_val = cv_split["folds"][i]["val"]
                 model = CMF(
                     k=k, lambda_=lam, method="als", niter=30,
-                    nonneg=True, verbose=False,
+                    nonneg=True, verbose=False, center=False,
                 ).fit(X_train, W=W)
                 pred = get_prediction(model, X_val)
                 cv_score += calc_rmse(pred, X_val, show=False) / n_folds
