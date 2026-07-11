@@ -41,7 +41,7 @@ One widely used alternative is the Generalized Linear Mixed Model (GLMM), which 
 
    In this study, we propose a new class ratemaking method utilizing matrix factorization. Specifically, we employ Matrix Factorization (MF) to explore an approach applicable even in environments with high-dimensional categorical data and missing values. To demonstrate the effectiveness of this method, we compare it with traditional class ratemaking techniques and discuss its advantages and challenges.
 
-   The structure of this paper is as follows: Chapter 2 reviews traditional class ratemaking methods, focusing particularly on existing issues related to interactions. Chapter 3 provides an overview of matrix factorization techniques and discusses their application to insurance ratemaking. Chapter 4 presents the results of an analysis using empirical data to demonstrate the effectiveness of the proposed method. Finally, Chapter 5 offers concluding remarks and addresses directions for future research.
+   The structure of this paper is as follows: Section 2 reviews traditional class ratemaking methods, focusing particularly on existing issues related to interactions. Section 3 provides an overview of matrix factorization techniques and discusses their application to insurance ratemaking. Section 4 presents the results of an analysis using empirical data to demonstrate the effectiveness of the proposed method. Finally, Section 5 offers concluding remarks and addresses directions for future research.
 
 # Existing Methods for Class Ratemaking
 
@@ -75,8 +75,6 @@ Multicollinearity: When multiple variables are interrelated, multicollinearity c
 
 Sparsity: When data for specific category combinations are scarce or entirely missing, it becomes difficult to accurately estimate the coefficients for those interaction terms. Handling missing values requires careful consideration, as simple imputation methods may introduce bias.
 
-   Interactions are crucial modeling elements for capturing effects that cannot be explained by individual variables alone. For example, a specific relationship may exist between a region and a vehicle manufacturer, where the loss ratio for a particular manufacturer is exceptionally high or low in a specific area. However, when considering interactions between variables that both have many categories, the number of possible combinations becomes enormous. This leads to segments with insufficient exposure due to data imbalance or segments with entirely missing data, further increasing the difficulty of modeling.
-
 ## Generalized Linear Mixed Models (GLMMs)
 
 To address the limitations of GLMs—particularly the issues of over-parameterization and overfitting when dealing with high-dimensional categorical variables—the Generalized Linear Mixed Models (GLMMs) are often considered. GLMMs extend the standard GLMs by introducing random effects for high-cardinality factors and their interactions as well as the traditional fixed effects. 
@@ -89,7 +87,7 @@ where u1,u2, …,uq represent the random effects assumed to follow a common dist
 
 The main advantage of introducing random effects lies in their inherent partial pooling mechanism. When data for specific category combinations are scarce or missing, GLMMs assume that the random effects for these combinations are drawn from a common distribution. This distributional assumption naturally shrinks weak or unsupported interaction terms toward zero, reducing overfitting and improving stability.
 
-However, while GLMMs provide a robust statistical framework for handling sparsity through regularization, they assume that unobserved or weakly supported interaction effects trend toward zero. They do not attempt to uncover underlying latent structures that might explain the missing data. Matrix Factorization, which will be introduced in Chapter 3, addresses this specific limitation by naturally imputing such interactions through latent factor structures without forcing them to vanish.
+However, while GLMMs provide a robust statistical framework for handling sparsity through regularization, they assume that unobserved or weakly supported interaction effects trend toward zero. They do not attempt to uncover underlying latent structures that might explain the missing data. Matrix Factorization, which will be introduced in Section 3, addresses this specific limitation by naturally imputing such interactions through latent factor structures without forcing them to vanish.
 
 # Class Ratemaking Using Matrix Factorization
 
@@ -121,7 +119,7 @@ X≈ABT
 
 ## Proposed Matrix Factorization Model
 
-Research on the application of matrix factorization to premium rating has also been advancing in international studies. For non-life instance, Seo et al. (2022) used sparse non-negative matrix factorization to extract the relationship between aggressive driving behavior and driving risk as interpretable low-rank latent risk factors, and successfully distinguished between high-risk and low-risk driving behaviors. Xie and Gan (2022) and Xie et al. (2024) applied sparse non-negative matrix factorization with fuzzy clustering to auto insurance claim data for the assessment of relative territory risk.  These studies demonstrate that matrix factorization can provide models that are more flexible and offer higher interpretability compared to traditional statistical methods, and it is anticipated as a novel approach in the field of actuarial science. 
+Research on the application of matrix factorization to premium rating has also been advancing in international studies. In non-life insurance, for instance, Seo et al. (2022) used sparse non-negative matrix factorization to extract the relationship between aggressive driving behavior and driving risk as interpretable low-rank latent risk factors, and successfully distinguished between high-risk and low-risk driving behaviors. Xie and Gan (2022) and Xie et al. (2025) applied sparse non-negative matrix factorization with fuzzy clustering to auto insurance claim data for the assessment of relative territory risk.  These studies demonstrate that matrix factorization can provide models that are more flexible and offer higher interpretability compared to traditional statistical methods, and it is anticipated as a novel approach in the field of actuarial science. 
 
    In this study, we propose an approach that directly applies matrix factorization to ratemaking. We utilize the following model, which further refines the non-negative matrix factorization model introduced in the previous section:
 
@@ -137,7 +135,7 @@ where ∙F2 is the squared Frobenius norm, that is, the square sum of the observ
 
    As the objective of this study is the application to class ratemaking, the observation matrix X consists of claim costs, specifically the historical pure premium rates. In recommendation systems, the rows and columns of the observation matrix X typically represent users and items, respectively; however, in this study's premium rating application, we correspond two risk factors with numerous categories to the rows and columns. Risk factors with many categories are assumed to include variables such as geographic regions or vehicle models, as discussed in the application examples in the next section. 
 
-   As mentioned in Chapter 2, estimating interactions between risk factors with many categories poses a challenge due to missing data in specific category combinations. However, in our proposed approach, interactions are represented by a low-rank matrix using the product of latent factor matrices. Consequently, even for combinations with missing data, appropriate predictions that account for the effects of the factors can be expected.
+   As mentioned in Section 2, estimating interactions between risk factors with many categories poses a challenge due to missing data in specific category combinations. However, in our proposed approach, interactions are represented by a low-rank matrix using the product of latent factor matrices. Consequently, even for combinations with missing data, appropriate predictions that account for the effects of the factors can be expected.
 
 # Applications
 
@@ -151,7 +149,7 @@ For this analysis, we utilize the brvehins1 dataset from the CASdatasets library
 
    In this study, we focus specifically on risk factors with a high number of categories: vehicle model and geographic region. The target variable for prediction is the historical pure premium rate, defined as the claim cost (total claim amount divided by total exposure).
 
-   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) for the selected Honda vehicle models across various geographic regions. Given that the full dataset contains 4,259 vehicle model categories and 40 regional categories—making direct visualization difficult—we have refined the scope for our results display. Specifically, we focus on Honda vehicle models, further narrowing the selection to 48 representative categories where the total exposure is 10 or greater. Furthermore, since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low, we only utilize data from cells (vehicle model × region combinations) with a total exposure of 100 or more. All other combinations are treated as missing values to be estimated via the proposed matrix factorization approach.
+   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) for the selected Honda vehicle models across various geographic regions. Given that the full dataset contains 4,259 vehicle model categories and 40 regional categories—making direct visualization difficult—we have refined the scope for our results display. Specifically, we focus on Honda vehicle models, further narrowing the selection to 48 representative categories where the total exposure is 10 or greater. Furthermore, since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low, we only utilize data from cells (vehicle model × region combinations) with a total exposure of 100 or more. All other combinations are treated as missing values to be estimated via the proposed matrix factorization approach. This missingness is not completely at random: a cell is unobserved precisely because it carries little or no exposure, which is itself informative about the segment. Any imputation therefore relies on the assumption that the latent structure learned from observed cells extends to these systematically different cells—an assumption that cannot be verified directly in the absence of ground truth for the missing cells.
 
 ![fig_4_2_1](fig_4_2_1.png)
 
@@ -159,7 +157,7 @@ Figure 4.2.1: Actual Claim Costs by Vehicle Model and Region
 
 ## GLM without Interaction Terms
 
-In actuarial practice, explicitly defining interaction terms for a vast number of category combinations is often considered technically challenging and computationally complex. Consequently, Generalized Linear Models (GLM) without interaction terms are commonly used as a pragmatic baseline. We first apply this fundamental approach to our dataset.
+In actuarial practice, explicitly defining interaction terms for a vast number of category combinations is often considered technically challenging and computationally complex. Consequently, Generalized Linear Models (GLM) without interaction terms are commonly used as a pragmatic baseline. We first apply this fundamental approach to our dataset. We emphasise that this main-effects-only specification is deliberately the simplest baseline; a stronger GLM benchmark would incorporate regularized interaction terms—for instance via the group fused lasso of Takahashi & Nomura (2023)—which we leave for future work.
 
    As previously described, the model is defined as follows:
 
@@ -167,7 +165,7 @@ Let Yij be the total claim amount for vehicle model i and area j, and Eij be the
 
 Yij~Poisson(λijEij )
 
-lnEYij ~lnEij+ β0+ αi+ τj
+lnEYij =lnEij+ β0+ αi+ τj
 
 Where:
 
@@ -179,7 +177,7 @@ lnEij serves as the offset term to account for varying exposure levels.
 
 αi and τj represent the main effects of the vehicle model and geographic area, respectively. Note that this specification assumes no interaction between the vehicle model and the area. The model is fitted using only the observed cells where data is present.
 
-   The estimation results for pure premium rates by vehicle model and region are shown in Figure 4.3.1. and Figure 4.3.2.. In Figure 4.3.2.., consistent with the previous section, the uncolored (white) areas represent missing values where data was insufficient for estimation.
+   The estimation results for pure premium rates by vehicle model and region are shown in Figure 4.3.1 and Figure 4.3.2. In Figure 4.3.2, consistent with the previous section, the uncolored (white) areas represent missing values where data was insufficient for estimation.
 
 ![fig_4_3_1](fig_4_3_1.png)
 
@@ -207,7 +205,7 @@ The model is specified as follows:
 
 Yij~Poisson(λijEij )
 
-lnEYij ~lnEij+ β0+ αi+ τj+ zij
+lnEYij =lnEij+ β0+ αi+ τj+ zij
 
 Where zij~N(0,  δ2) represents the random effect for the interaction between vehicle model i and area j. The definitions of the other variables in the equation are the same as those described in Section 4.3.
 
@@ -235,13 +233,13 @@ The characteristics of the estimation results are summarized below:
 
 ## Matrix Factorization (MF)
 
-In this section, we apply the proposed matrix factorization approach using the cmfrec library in R. This library is a standard tool for matrix factorization available in both R and Python. It implements various optimization algorithms, including gradient-based methods and Alternating Least Squares (ALS), and supports both L1 and L2 regularization. Additionally, the library incorporates specific initialization strategies designed by the author to avoid convergence to poor local optima.The model is formulated in 3.2.
+In this section, we apply the proposed matrix factorization approach using the cmfrec library (the analysis reported here uses its Python implementation). This library is a standard tool for matrix factorization available in both R and Python. It implements various optimization algorithms, including gradient-based methods and Alternating Least Squares (ALS), and supports both L1 and L2 regularization. Additionally, the library incorporates specific initialization strategies designed by the author to avoid convergence to poor local optima.The model is formulated in 3.2.
 
-   In terms of the model implementation, we utilize the Alternating Least Squares (ALS) algorithm for optimization alongside* *L2 regularization, both of which serve as the default settings within the library. To ensure that the estimated factors remain within a valid range for premium rating, the nonneg parameter is set to TRUE to enforce strict non-negativity constraints. Furthermore, the center parameter is set to FALSE to bypass mean-centering, thereby maintaining the original scale and integrity of the non-negative observation matrix.
+   In terms of the model implementation, we utilize the Alternating Least Squares (ALS) algorithm for optimization alongside* *L2 regularization, both of which serve as the default settings within the library. To ensure that the estimated factors remain within a valid range for premium rating, the nonneg parameter is set to TRUE to enforce strict non-negativity constraints. Furthermore, the center parameter is set to FALSE to bypass mean-centering, thereby maintaining the original scale and integrity of the non-negative observation matrix. It should be noted that the non-negativity constraint applies to the latent factor matrices A and B but not to the bias terms μ, bA and bB; consequently the fitted values are not strictly guaranteed to be non-negative, and predicted rates should be floored at zero where required in practice.
 
 - Hyperparameter Optimization via Cross-Validation
 
-The number of latent factors k and the regularization weight λ were optimized through a 4-fold cross-validation using a grid search method. We selected the parameter combination that minimized the average Root Mean Square Error (RMSE), resulting in an optimal configuration of k=22 and λ=30.
+The number of latent factors k and the regularization weight λ were selected by 4-fold cross-validation over a grid, choosing the combination that minimised the average, exposure-weighted Root Mean Square Error (RMSE). Two features of the result are worth reporting plainly. First, the cross-validation error surface is nearly flat over a broad range of k, so the selected rank should be read as the value that best regularizes the low-rank interaction term rather than as evidence of a specific intrinsic dimensionality. Second, the criterion favours strong regularization—the selected λ lies at the high end of the grid—which is consistent with the finding in Section 4.6 that, on this particular dataset, the interaction term contributes little beyond the main effects.
 
 - Model Training and Validation
 
@@ -304,8 +302,6 @@ In this study, we focused on class-based premium rating and examined Matrix Fact
 **Dutang, C., & Charpentier, A. (2020).** *CASdatasets: A Collection of Actuarial Datasets*. R package version 1.0-11.
 
 **Hammad, M. S., & Harby, G. A. (2016).** Using Multilevel Modeling for Group Health Insurance Ratemaking. *Predictive Modeling Applications in Actuarial Science: Volume 2, Case Studies in Insurance,* 126.
-
-**Norberg, R. (1993).** Prediction of individual lifetime losses in disease insurance. *ASTIN Bulletin*, 23(1), 83–95.
 
 **Richman, R., & Wüthrich, M. V. (2024).** High-cardinality categorical covariates in network regressions. *Japanese Journal of Statistics and Data Science*, 7(2), 921–965.
 
