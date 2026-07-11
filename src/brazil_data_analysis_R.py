@@ -423,6 +423,37 @@ def main():
     comparison.to_csv("docs/model_comparison_python.csv")
     print("saved docs/model_comparison_python.csv")
 
+    # ---- Stratify eval cells by exposure (sparse vs dense) -----------------
+    # Tests the accepted abstract's claim that MF "effectively estimated rates
+    # for sparse segments where GLMs often fail". Sparse = below-median exposure.
+    preds = {"MF (weighted)": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred}
+    median_exp = float(np.median(expw))
+    strata = {
+        "sparse (exposure < median)": expw < median_exp,
+        "dense  (exposure >= median)": expw >= median_exp,
+    }
+    strat_rows = []
+    for sname, smask in strata.items():
+        for mname, pred in preds.items():
+            strat_rows.append({
+                "stratum": sname, "model": mname, "n": int(smask.sum()),
+                "wRMSE": float(weighted_rmse(pred[smask], act[smask], expw[smask])),
+                "PoissonDev": float(poisson_deviance(
+                    act[smask] * expw[smask], pred[smask] * expw[smask])),
+            })
+    strat = pd.DataFrame(strat_rows)
+    print("\n===== Held-out performance stratified by exposure =====")
+    print(strat.to_string(index=False))
+    strat.to_csv("docs/model_comparison_by_exposure_python.csv", index=False)
+    print("saved docs/model_comparison_by_exposure_python.csv")
+
+    # per-cell predictions (for any further stratification / diagnostics)
+    pd.DataFrame({
+        "VehModel": models[er], "Area": areas[ec], "exposure": expw,
+        "actual": act, "MF": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred,
+    }).to_csv("docs/model_predictions_percell_python.csv", index=False)
+    print("saved docs/model_predictions_percell_python.csv")
+
     # test-set predicted-vs-true scatter for every model (not just MF)
     visualize_scatter_plot(act, mf_pred, "MF (weighted)",
                            fig_path=f"{FIG_DIR}/scatter_test_mf.png")
