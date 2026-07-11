@@ -36,30 +36,12 @@ import pandas as pd
 import pymc as pm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from brazil_data_analysis_R import get_total, load_bravehins, visualize_heatmap
-
-
-def build_pure_premium():
-    """Reproduce the model x region pure-premium / exposure matrices."""
-    brv = load_bravehins("data/brvehins_org.csv")
-    brv = brv[brv["VehModel"].str.contains("Honda", na=False)]
-    claim_types = ["ClaimAmountRob", "ClaimAmountPartColl", "ClaimAmountTotColl",
-                   "ClaimAmountFire", "ClaimAmountOther"]
-    brv["ClaimTotal"] = brv[claim_types].sum(axis=1)
-    cats = ["VehModel", "Area"]
-    exposure_total = get_total(brv, cats, "ExposTotal", 100)
-    claim_total = get_total(brv, cats, "ClaimTotal")
-    keep = exposure_total.sum(axis=1, skipna=True) > 10
-    exposure_total = exposure_total.loc[keep]
-    claim_total = claim_total.reindex(index=exposure_total.index,
-                                      columns=exposure_total.columns)
-    pure_premium = claim_total / exposure_total
-    return pure_premium, exposure_total
+from ratemaking import load_pure_premium, visualize_heatmap
 
 
 def main():
     os.makedirs("docs", exist_ok=True)
-    pure_premium, exposure_total = build_pure_premium()
+    pure_premium, exposure_total = load_pure_premium()
     pp = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
     models = pure_premium.index.to_numpy()

@@ -4,9 +4,8 @@ Brazil auto insurance data analysis (matrix factorization for class ratemaking)
 Python analysis (MAIN script) -- based on brazil_data_analysis_R.R (+ cmf.R)
 =============================================================================
 
-This is the primary Python implementation of the ratemaking analysis. It began
-as a translation of the R pipeline (cmf.R helpers are ported inline, so the file
-is self-contained -- no `source("cmf.R")` needed) and then implements the core
+Primary Python implementation of the ratemaking analysis. Shared helpers live in
+ratemaking.py; this file orchestrates the pipeline and implements the core
 methodological fixes raised in review:
 
   * REVIEWER FIX #1 -- single comparison on the SAME held-out cells. MF, GLM and
@@ -20,6 +19,12 @@ methodological fixes raised in review:
     (count scale) are reported side by side, not RMSE-in-currency alone.
   * No leakage -- the test set is held out BEFORE the CV grid search.
 
+Structure:
+  prepare_data()            -> pure-premium / exposure matrices + CMF weights
+  run_comparison()          -> split, tune, evaluate MF/GLM/GLMM, tables, scatters
+  generate_paper_figures()  -> regenerate paper/fig_4_2_1 .. fig_4_5_2
+  main()                    -> orchestrates the above
+
 Differences from the R version (numbers differ by design):
   * Data is loaded from data/brvehins_org.csv (the Honda-filtered raw export the
     R script writes) instead of the CASdatasets .rda files.
@@ -28,11 +33,9 @@ Differences from the R version (numbers differ by design):
   * GLMM: statsmodels' PoissonBayesMixedGLM has no offset, so log(exposure) enters
     as a fixed covariate -- an exposure-aware substitute for R's lme4::glmer offset.
     The interaction random effect is per observed cell (observation-level), which
-    makes the fit saturated; the MAP/Laplace optimiser may not fully converge, so
-    only the point predictions are used (they revert to main effects out-of-sample,
-    exactly the GLMM limitation the paper describes). For a production-grade,
-    fully-converged GLMM, fit with R's lme4::glmer. Point estimates are close,
-    not identical, to that reference.
+    makes the fit saturated; only the point predictions are used (they revert to
+    main effects out-of-sample, exactly the GLMM limitation the paper describes).
+    For a fully-converged GLMM with uncertainty, see glmm_pymc.py.
 
 Dependencies: pandas, numpy, matplotlib, cmfrec, statsmodels
   pip install cmfrec statsmodels
@@ -40,342 +43,124 @@ Dependencies: pandas, numpy, matplotlib, cmfrec, statsmodels
 
 import os
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import patsy
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
 from cmfrec import CMF
+from statsmodels.genmod.bayes_mixed_glm import PoissonBayesMixedGLM
 
-# =============================================================================
-# HELPERS  (ported from cmf.R)
-# =============================================================================
+from ratemaking import (
+    get_prediction,
+    load_pure_premium,
+    optimize_params,
+    poisson_deviance,
+    train_test_split,
+    visualize_heatmap,
+    visualize_scatter_plot,
+    weighted_rmse,
+)
 
-
-def load_bravehins(csv_path):
-    """Load the Brazilian auto insurance data.
-
-    R original loads the five CASdatasets .rda shards and rbinds them. Here we
-    read the already-combined CSV export (data/brvehins_org.csv).
-    """
-    return pd.read_csv(csv_path)
-
-
-def fill_with_na(df, threshold):
-    """Fill values lower than `threshold` with NaN (cf. cmf.R::fill_with_na)."""
-    return df.mask(df < threshold)
-
-
-def get_total(data, category_to_analyze, aggregate_col, threshold=None):
-    """Aggregate `aggregate_col` into a (cat1 x cat2) matrix by summing.
-
-    Mirrors cmf.R::get_total: pivot to a wide matrix (rows = category 1,
-    cols = category 2), then blank out cells below `threshold`.
-    Returns a wide-format DataFrame (index = cat1, columns = cat2).
-    """
-    print(f"aggregate_col: {aggregate_col}   group_cols: {category_to_analyze}")
-    cat1, cat2 = category_to_analyze
-    total = data.pivot_table(
-        index=cat1, columns=cat2, values=aggregate_col, aggfunc="sum"
-    )
-    if threshold is not None:
-        total = fill_with_na(total, threshold)
-    print(total.shape)
-    return total
+FIG_DIR = "figs/python_port"
+PAPER_DIR = "paper"
+DOCS_DIR = "docs"
+K_GRID = range(2, 31)
+LAMBDA_GRID = [0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000]
 
 
-def train_test_split(X, ratio=0.75, seed=123):
-    """Cell-level split of a wide matrix into train/test (cf. cmf.R).
-
-    Observed (non-NaN) cells are partitioned; the complementary cells are masked
-    to NaN in each returned matrix. `X` is a 2D numpy array.
-    """
-    rng = np.random.RandomState(seed)
-    valid = np.argwhere(~np.isnan(X))
-    n_valid = len(valid)
-    n_train = int(np.floor(ratio * n_valid))
-    perm = rng.permutation(n_valid)
-    train_idx = valid[perm[:n_train]]
-    test_idx = valid[perm[n_train:]]
-    X_train = X.copy()
-    X_test = X.copy()
-    X_train[test_idx[:, 0], test_idx[:, 1]] = np.nan
-    X_test[train_idx[:, 0], train_idx[:, 1]] = np.nan
-    return {"X_train": X_train, "X_test": X_test}
+def _fit_weighted_mf(X, W, best):
+    """Fit an exposure-weighted, non-negative CMF at the tuned (k, lambda)."""
+    return CMF(
+        k=best["k"], lambda_=best["lambda"], method="als", niter=30,
+        nonneg=True, verbose=False, center=False,
+    ).fit(X, W=W)
 
 
-def k_fold_split(X, k=4, seed=123):
-    """Split observed cells into k folds for cross-validation (cf. cmf.R)."""
-    rng = np.random.RandomState(seed)
-    valid = np.argwhere(~np.isnan(X))
-    n_valid = len(valid)
-    shuffled = valid[rng.permutation(n_valid)]
-    fold_size = n_valid // k
-    folds = []
-    start = 0
-    for i in range(k):
-        end = n_valid if i == k - 1 else start + fold_size
-        val_idx = shuffled[start:end]
-        X_train = X.copy()
-        X_val = X.copy()
-        # validation cells -> NaN in train ; everything else -> NaN in val
-        mask = np.ones(n_valid, dtype=bool)
-        mask[start:end] = False
-        train_idx = shuffled[mask]
-        X_train[val_idx[:, 0], val_idx[:, 1]] = np.nan
-        X_val[train_idx[:, 0], train_idx[:, 1]] = np.nan
-        folds.append({"train": X_train, "val": X_val})
-        start = end
-    return {"folds": folds, "X": X}
-
-
-def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=True):
-    """Melt a wide matrix to long format (cf. cmf.R::wide_to_long_format)."""
-    long_df = wide_df.reset_index().melt(id_vars=wide_df.index.name)
-    long_df.columns = list(value_names)
-    if na_omit:
-        long_df = long_df.dropna()
-    return long_df
-
-
-def get_prediction(model, X):
-    """Predict every observed (non-NaN) cell of X and fill them in (cf. cmf.R).
-
-    `X` is a 2D numpy array; returns a copy with observed cells replaced by the
-    model prediction (missing cells stay NaN).
-    """
-    rows, cols = np.where(~np.isnan(X))
-    preds = model.predict(user=rows, item=cols)
-    X_pred = X.copy()
-    X_pred[rows, cols] = preds
-    return X_pred
-
-
-def calc_rmse(pred, act, show=True):
-    """RMSE over cells observed in both matrices (cf. cmf.R::calc_rmse)."""
-    both = ~np.isnan(pred) & ~np.isnan(act)
-    rmse = np.sqrt(np.mean((pred[both] - act[both]) ** 2))
-    if show:
-        print(f"RMSE : {rmse:.4f}")
-    return rmse
-
-
-def weighted_rmse(pred, act, w):
-    """Exposure-weighted RMSE on the pure-premium (rate) scale."""
-    pred, act, w = (np.asarray(a, float) for a in (pred, act, w))
-    return np.sqrt(np.sum(w * (pred - act) ** 2) / np.sum(w))
-
-
-def poisson_deviance(y, mu):
-    """Poisson deviance on the total-claim (count) scale.
-
-    Puts GLM / GLMM / MF on comparable, exposure-aware footing: y = actual
-    total claim (= pure_premium * exposure), mu = predicted rate * exposure.
-    """
-    y = np.asarray(y, float)
-    mu = np.clip(np.asarray(mu, float), 1e-8, None)
-    term = np.where(y > 0, y * np.log(y / mu), 0.0)
-    return 2.0 * np.sum(term - (y - mu))
-
-
-def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None):
-    """CV grid search over (k, lambda) for CMF (cf. cmf.R::optimize_params).
-
-    If `W` (per-cell weights, same shape as X) is given, the CMF loss is
-    weighted -- so the tuned lambda is calibrated for the SAME weighted loss
-    used in the final fit (otherwise a weighted final fit would be effectively
-    unregularized). Returns the best row as {"k", "lambda", "cv_score"}.
-    """
-    cv_split = k_fold_split(X, k=n_folds, seed=random_seed)
-    records = []
-    for k in k_values:
-        for lam in lambda_values:
-            cv_score = 0.0
-            for i in range(n_folds):
-                X_train = cv_split["folds"][i]["train"]
-                X_val = cv_split["folds"][i]["val"]
-                model = CMF(
-                    k=k, lambda_=lam, method="als", niter=30,
-                    nonneg=True, verbose=False,
-                ).fit(X_train, W=W)
-                pred = get_prediction(model, X_val)
-                cv_score += calc_rmse(pred, X_val, show=False) / n_folds
-            print(f"k: {k} lambda: {lam} CV RMSE: {cv_score}")
-            records.append((k, lam, cv_score))
-    cv_result = pd.DataFrame(records, columns=["k", "lambda", "cv_score"])
-    best = cv_result.loc[cv_result["cv_score"].idxmin()]
-    return {"k": int(best["k"]), "lambda": float(best["lambda"]),
-            "cv_score": float(best["cv_score"])}
-
-
-def visualize_scatter_plot(actual, pred, model_name, max_lim=2500, fig_path=None):
-    """Predicted-vs-true scatter with a 45-degree line (cf. cmf.R)."""
-    actual = np.asarray(actual, dtype=float).ravel()
-    pred = np.asarray(pred, dtype=float).ravel()
-    keep = ~np.isnan(actual) & ~np.isnan(pred)
-    actual, pred = actual[keep], pred[keep]
-    plt.figure(figsize=(5, 5))
-    plt.scatter(actual, pred, color="black", alpha=0.7)
-    plt.plot([0, max_lim], [0, max_lim], color="red")
-    plt.xlim(0, max_lim)
-    plt.ylim(0, max_lim)
-    plt.xlabel("True values")
-    plt.ylabel("Predicted values")
-    plt.title(f"predicted vs. true values ({model_name})")
-    if fig_path:
-        plt.savefig(fig_path, bbox_inches="tight", dpi=300)
-        print(f"saved {fig_path}")
-    plt.close()
-
-
-def visualize_heatmap(data, title="", max_limit=5000, fig_path=None):
-    """Heatmap of a wide matrix (cf. cmf.R::visualize_heatmap).
-
-    `data` is a wide DataFrame (index = model, columns = region).
-    """
-    mat = np.asarray(data, dtype=float)
-    plt.figure(figsize=(15, 10))
-    im = plt.imshow(mat, aspect="auto", cmap="viridis", vmin=0, vmax=max_limit)
-    plt.colorbar(im, label="Pure Premium")
-    plt.xlabel("Category")
-    plt.ylabel("Model")
-    plt.title(title)
-    if hasattr(data, "columns"):
-        plt.xticks(range(mat.shape[1]), list(data.columns), rotation=45, ha="right",
-                   fontsize=6)
-    if fig_path:
-        plt.savefig(fig_path, bbox_inches="tight", dpi=300)
-        print(f"saved {fig_path}")
-    plt.close()
+def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
+    """Long-format (VehModel, Area, pure_premium, exposure, claim) for GLM/GLMM."""
+    df = pd.DataFrame({
+        "VehModel": models[rows], "Area": areas[cols],
+        "pure_premium": pp_mat[rows, cols], "exposure": exp_mat[rows, cols],
+    })
+    df["claim"] = df["pure_premium"] * df["exposure"]
+    df["interaction"] = df["VehModel"].astype(str) + "." + df["Area"].astype(str)
+    return df
 
 
 # =============================================================================
-# MAIN PIPELINE
+# 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
 
-def main():
-    FIG_DIR = "figs/python_port"
-    os.makedirs(FIG_DIR, exist_ok=True)
-
-    # -------------------------------------------------------------------------
-    # 2. データの読み込み  (Load data)
-    # -------------------------------------------------------------------------
-    brvehins = load_bravehins("data/brvehins_org.csv")
-    brvehins = brvehins[brvehins["VehModel"].str.contains("Honda", na=False)]
-    claim_types = [
-        "ClaimAmountRob", "ClaimAmountPartColl", "ClaimAmountTotColl",
-        "ClaimAmountFire", "ClaimAmountOther",
-    ]
-    brvehins["ClaimTotal"] = brvehins[claim_types].sum(axis=1)
-    print(brvehins.shape)
-
-    # -------------------------------------------------------------------------
-    # 3. データの下処理  (Preprocessing)
-    # -------------------------------------------------------------------------
-    category_to_analyze = ["VehModel", "Area"]
-
-    # exposure が 100 以上の区分のみを残す (keep cells with exposure >= 100)
-    premium_total = get_total(brvehins, category_to_analyze, "PremTotal", 0)
-    exposure_total = get_total(brvehins, category_to_analyze, "ExposTotal", 100)
-    claim_total = get_total(brvehins, category_to_analyze, "ClaimTotal")
-
-    # exposure 合計が 10 以上の車種のみを残す (keep models whose total exposure > 10)
-    row_keep = exposure_total.sum(axis=1, skipna=True) > 10
-    claim_total = claim_total.loc[row_keep]
-    premium_total = premium_total.loc[row_keep]
-    exposure_total = exposure_total.loc[row_keep]
-
-    # align claim_total / premium_total to exposure_total's cells & order
-    claim_total = claim_total.reindex(index=exposure_total.index,
-                                      columns=exposure_total.columns)
-    premium_total = premium_total.reindex(index=exposure_total.index,
-                                           columns=exposure_total.columns)
-
-    # 純率 = クレームコスト = 総クレーム / 総エクスポージャー (pure premium)
-    pure_premium = claim_total / exposure_total
-    loss_ratio = claim_total / premium_total  # noqa: F841  (kept for parity)
-
-    pp_mat = pure_premium.to_numpy(dtype=float)  # wide matrix for CMF
-    print(f"pure_premium matrix: {pp_mat.shape}, "
-          f"observed cells: {np.sum(~np.isnan(pp_mat))}")
-
-    # exposure matrix aligned to pp_mat (used for weighting + weighted metrics)
+def prepare_data():
+    """Return (pure_premium df, pp_mat, exp_mat, obs_cells, W_full)."""
+    pure_premium, exposure_total = load_pure_premium()
+    pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
+
     # CMF weights: exposure normalized to mean 1 over observed cells, so the
     # weighted loss stays on the same scale as the unweighted one and the tuned
     # lambda remains meaningful (raw exposure ~100-15000 would swamp lambda).
     obs_cells = ~np.isnan(pp_mat)
     mean_exp = float(exp_mat[obs_cells].mean())
     W_full = np.nan_to_num(exp_mat, nan=0.0) / mean_exp
+    print(f"pure_premium matrix: {pp_mat.shape}, observed cells: {obs_cells.sum()}")
+    return pure_premium, pp_mat, exp_mat, obs_cells, W_full
 
-    import statsmodels.api as sm
-    import statsmodels.formula.api as smf
-    import patsy
-    from statsmodels.genmod.bayes_mixed_glm import PoissonBayesMixedGLM
 
-    # -------------------------------------------------------------------------
-    # 4. 分割してからチューニング  (Split FIRST, then tune -- avoid leakage)
-    # -------------------------------------------------------------------------
-    # Reviewer fix: hold out the test cells BEFORE the CV grid search so the
-    # chosen (k, lambda) never see the test set.
+# =============================================================================
+# 4-6. 分割・チューニング・3手法の同一テストセル比較
+# =============================================================================
+
+def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
+    """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM on one test set.
+
+    Returns (best_params, ctx) where ctx carries the arrays the figures need.
+    """
+    os.makedirs(FIG_DIR, exist_ok=True)
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    models = pure_premium.index.to_numpy()
+    areas = pure_premium.columns.to_numpy()
+
+    # ---- Split FIRST, then tune (avoid leakage) ----------------------------
     split = train_test_split(pp_mat, ratio=0.75, seed=123)
     X_train, X_test = split["X_train"], split["X_test"]
     train_mask = ~np.isnan(X_train)
 
     # Common evaluation set: test cells whose vehicle model AND area both appear
-    # in the training data, so that GLM / GLMM are well defined there. All three
-    # models are then scored on this identical set (reviewer fix #1).
+    # in training, so GLM / GLMM are well defined there (reviewer fix #1).
     rows_ok = train_mask.any(axis=1)
     cols_ok = train_mask.any(axis=0)
     eval_mask = (~np.isnan(X_test)) & rows_ok[:, None] & cols_ok[None, :]
     n_test_all = int(np.sum(~np.isnan(X_test)))
-    n_eval = int(np.sum(eval_mask))
+    n_eval = int(eval_mask.sum())
     print(f"eval test cells: {n_eval} "
           f"(dropped {n_test_all - n_eval} test cells with an unseen model/area)")
 
-    best_params = optimize_params(
-        X=X_train,  # <- training matrix only
-        n_folds=4,
-        k_values=range(2, 31),
-        lambda_values=[0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000],
-        W=W_full,   # <- weighted CV, matching the weighted final fit
-    )
-    print("best_params:", best_params)
+    best = optimize_params(X_train, n_folds=4, k_values=K_GRID,
+                           lambda_values=LAMBDA_GRID, W=W_full)
+    print("best_params:", best)
 
-    # -------------------------------------------------------------------------
-    # 5. 3手法を同一テストセルで評価  (Evaluate MF / GLM / GLMM on the same cells)
-    # -------------------------------------------------------------------------
     er, ec = np.where(eval_mask)
-    act = pp_mat[er, ec]                # actual pure premium on the eval cells
-    expw = exp_mat[er, ec]              # exposure on the eval cells (weights)
+    act = pp_mat[er, ec]
+    expw = exp_mat[er, ec]
 
     # ---- MF (exposure-weighted) --------------------------------------------
-    # Reviewer fix #2: weight the MF loss by exposure via W=, matching the
-    # offset(log(exposure)) evidence weighting used by the GLM / GLMM.
-    mf = CMF(
-        k=best_params["k"], lambda_=best_params["lambda"], method="als",
-        niter=30, nonneg=True, verbose=False, center=False,
-    ).fit(X_train, W=W_full)
+    mf = _fit_weighted_mf(X_train, W_full, best)
     mf_pred = np.asarray(mf.predict(user=er, item=ec), dtype=float)
 
     # ---- long-format train / test for GLM & GLMM ---------------------------
-    models = pure_premium.index.to_numpy()
-    areas = pure_premium.columns.to_numpy()
     tr, tc = np.where(train_mask)
-    train_long = pd.DataFrame({
-        "VehModel": models[tr], "Area": areas[tc],
-        "pure_premium": pp_mat[tr, tc], "exposure": exp_mat[tr, tc],
-    })
-    train_long["claim"] = train_long["pure_premium"] * train_long["exposure"]
-    train_long["interaction"] = (train_long["VehModel"].astype(str) + "." +
-                                 train_long["Area"].astype(str))
+    train_long = _long_frame(models, areas, tr, tc, pp_mat, exp_mat)
     test_long = pd.DataFrame({
         "VehModel": models[er], "Area": areas[ec],
         "pure_premium": act, "exposure": expw,
     })
-    # centered log(exposure) as the GLMM's exposure covariate (centering keeps
-    # its coefficient well-scaled so the variational/MAP fit stays stable)
-    _le_mean = float(np.log(train_long["exposure"]).mean())
-    train_long["log_exposure"] = np.log(train_long["exposure"]) - _le_mean
-    test_long["log_exposure"] = np.log(test_long["exposure"]) - _le_mean
+    # centered log(exposure) as the GLMM's exposure covariate (keeps its
+    # coefficient well-scaled so the MAP fit stays stable)
+    le_mean = float(np.log(train_long["exposure"]).mean())
+    train_long["log_exposure"] = np.log(train_long["exposure"]) - le_mean
+    test_long["log_exposure"] = np.log(test_long["exposure"]) - le_mean
 
     # ---- GLM (main effects, Poisson, offset log(exposure)) -----------------
     glm = smf.glm(
@@ -386,15 +171,13 @@ def main():
                 / test_long["exposure"]).to_numpy()
 
     # ---- GLMM (interaction as random intercept) ----------------------------
-    # statsmodels' Bayes mixed GLM has no offset, so log(exposure) enters as a
-    # fixed covariate instead (a documented, exposure-aware substitute for the
-    # offset). Each observed cell is its own interaction level, so on the test
-    # cells -- all unseen interactions -- the random effect is 0 and the GLMM
-    # reverts to its main effects (exactly the paper's stated GLMM limitation).
+    # No offset in statsmodels' Bayes mixed GLM -> log(exposure) is a covariate.
+    # Test cells are all unseen interactions, so the random effect is 0 and the
+    # GLMM reverts to its main effects (the paper's stated GLMM limitation).
     glmm = PoissonBayesMixedGLM.from_formula(
         "claim ~ C(VehModel) + C(Area) + log_exposure",
         {"interaction": "0 + C(interaction)"}, train_long,
-    ).fit_map()  # MAP/Laplace -- closer to lme4::glmer and more stable than VB
+    ).fit_map()
     dm_tr = patsy.dmatrix("C(VehModel) + C(Area) + log_exposure",
                           train_long, return_type="dataframe")
     dm_te = patsy.build_design_matrices(
@@ -402,14 +185,11 @@ def main():
     glmm_pred = None
     if dm_tr.shape[1] == len(glmm.fe_mean):
         glmm_pred = np.exp(dm_te.to_numpy() @ glmm.fe_mean) / test_long["exposure"].to_numpy()
-    # guard: if the GLMM diverged, fall back to GLM (its test-cell behaviour
-    # reverts to main effects anyway, so this is a faithful stand-in)
-    if glmm_pred is None or not np.all(np.isfinite(glmm_pred)) or \
-            glmm_pred.max() > 1e6:
+    if glmm_pred is None or not np.all(np.isfinite(glmm_pred)) or glmm_pred.max() > 1e6:
         print("WARN: GLMM fit unstable; falling back to GLM predictions for GLMM")
         glmm_pred = glm_pred
 
-    # ---- Comparison table on the identical eval cells ----------------------
+    # ---- comparison table on the identical eval cells ----------------------
     def _metrics(pred):
         return {
             "RMSE": float(np.sqrt(np.mean((pred - act) ** 2))),
@@ -424,116 +204,101 @@ def main():
     }).T
     print("\n===== Held-out comparison (identical test cells) =====")
     print(comparison.to_string())
-    os.makedirs("docs", exist_ok=True)
-    comparison.to_csv("docs/model_comparison_python.csv")
-    print("saved docs/model_comparison_python.csv")
+    comparison.to_csv(f"{DOCS_DIR}/model_comparison_python.csv")
+    print(f"saved {DOCS_DIR}/model_comparison_python.csv")
 
-    # ---- Stratify eval cells by exposure (sparse vs dense) -----------------
-    # Tests the accepted abstract's claim that MF "effectively estimated rates
-    # for sparse segments where GLMs often fail". Sparse = below-median exposure.
+    # ---- stratify eval cells by exposure (sparse vs dense) -----------------
     preds = {"MF (weighted)": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred}
     median_exp = float(np.median(expw))
     strata = {
         "sparse (exposure < median)": expw < median_exp,
         "dense  (exposure >= median)": expw >= median_exp,
     }
-    strat_rows = []
-    for sname, smask in strata.items():
-        for mname, pred in preds.items():
-            strat_rows.append({
-                "stratum": sname, "model": mname, "n": int(smask.sum()),
-                "wRMSE": float(weighted_rmse(pred[smask], act[smask], expw[smask])),
-                "PoissonDev": float(poisson_deviance(
-                    act[smask] * expw[smask], pred[smask] * expw[smask])),
-            })
+    strat_rows = [
+        {"stratum": sname, "model": mname, "n": int(smask.sum()),
+         "wRMSE": float(weighted_rmse(pred[smask], act[smask], expw[smask])),
+         "PoissonDev": float(poisson_deviance(
+             act[smask] * expw[smask], pred[smask] * expw[smask]))}
+        for sname, smask in strata.items() for mname, pred in preds.items()
+    ]
     strat = pd.DataFrame(strat_rows)
     print("\n===== Held-out performance stratified by exposure =====")
     print(strat.to_string(index=False))
-    strat.to_csv("docs/model_comparison_by_exposure_python.csv", index=False)
-    print("saved docs/model_comparison_by_exposure_python.csv")
+    strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python.csv", index=False)
+    print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python.csv")
 
-    # per-cell predictions (for any further stratification / diagnostics)
+    # per-cell predictions (for further diagnostics)
     pd.DataFrame({
         "VehModel": models[er], "Area": areas[ec], "exposure": expw,
         "actual": act, "MF": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred,
-    }).to_csv("docs/model_predictions_percell_python.csv", index=False)
-    print("saved docs/model_predictions_percell_python.csv")
+    }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python.csv", index=False)
+    print(f"saved {DOCS_DIR}/model_predictions_percell_python.csv")
 
-    # test-set predicted-vs-true scatter for every model (not just MF)
-    visualize_scatter_plot(act, mf_pred, "MF (weighted)",
-                           fig_path=f"{FIG_DIR}/scatter_test_mf.png")
-    visualize_scatter_plot(act, glm_pred, "GLM",
-                           fig_path=f"{FIG_DIR}/scatter_test_glm.png")
-    visualize_scatter_plot(act, glmm_pred, "GLMM",
-                           fig_path=f"{FIG_DIR}/scatter_test_glmm.png")
+    # test-set predicted-vs-true scatter for every model
+    for name, pred in preds.items():
+        tag = name.split()[0].lower()
+        visualize_scatter_plot(act, pred, name,
+                               fig_path=f"{FIG_DIR}/scatter_test_{tag}.png")
 
-    # -------------------------------------------------------------------------
-    # 6. 全カテゴリの推定  (Refit weighted MF on all data -> all-cell heatmap)
-    # -------------------------------------------------------------------------
-    mf_full = CMF(
-        k=best_params["k"], lambda_=best_params["lambda"], method="als",
-        niter=30, nonneg=True, verbose=False, center=False,
-    ).fit(pp_mat, W=W_full)
+    ctx = {"models": models, "areas": areas, "er": er, "ec": ec,
+           "act": act, "mf_pred": mf_pred, "comparison": comparison, "n_eval": n_eval}
+    return best, ctx
 
-    visualize_heatmap(pure_premium, "actual",
-                      fig_path=f"{FIG_DIR}/heatmap_actual.png")
-    estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
-    visualize_heatmap(pd.DataFrame(estimated_mf, index=pure_premium.index,
-                                   columns=pure_premium.columns),
-                      "pred: MF (weighted)", fig_path=f"{FIG_DIR}/heatmap_mf.png")
 
-    # -------------------------------------------------------------------------
-    # 7. 論文用の図を生成  (Regenerate the paper's Figures 4.2.1 .. 4.5.2)
-    # -------------------------------------------------------------------------
-    # These overwrite paper/fig_*.png so the paper reflects THIS (Python,
-    # exposure-weighted) analysis as the single source of truth. GLM and GLMM
-    # are refit here on ALL observed cells, matching the paper's final figures.
-    PAPER = "paper"
+# =============================================================================
+# 7. 論文用の図を生成  (Regenerate the paper's Figures 4.2.1 .. 4.5.2)
+# =============================================================================
+
+def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx):
+    """Overwrite paper/fig_*.png so the paper reflects THIS Python analysis.
+
+    GLM and GLMM are refit on ALL observed cells, matching the paper's final
+    (full-data) figures.
+    """
+    os.makedirs(FIG_DIR, exist_ok=True)
+    models, areas = ctx["models"], ctx["areas"]
+    act, mf_pred = ctx["act"], ctx["mf_pred"]
 
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
 
-    # Fig 4.2.1 -- actual claim costs
-    visualize_heatmap(pure_premium,
-                      "Actual Claim Costs by Vehicle Model and Region",
-                      fig_path=f"{PAPER}/fig_4_2_1.png")
+    # ---- MF: full-data refit -> all-cell estimates -------------------------
+    mf_full = _fit_weighted_mf(pp_mat, W_full, best)
+    estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
-    # Fig 4.5.1 -- MF predicted vs. true (hold-out cells) ; 4.5.2 -- MF all cells
+    # MF diagnostics into the working figs dir, and the paper figures
+    visualize_heatmap(pure_premium, "actual", fig_path=f"{FIG_DIR}/heatmap_actual.png")
+    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)",
+                      fig_path=f"{FIG_DIR}/heatmap_mf.png")
+
+    visualize_heatmap(pure_premium, "Actual Claim Costs by Vehicle Model and Region",
+                      fig_path=f"{PAPER_DIR}/fig_4_2_1.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
-                           fig_path=f"{PAPER}/fig_4_5_1.png")
+                           fig_path=f"{PAPER_DIR}/fig_4_5_1.png")
     visualize_heatmap(_to_df(estimated_mf),
                       "Estimated Pure Premium Rates (Matrix Factorization)",
-                      fig_path=f"{PAPER}/fig_4_5_2.png")
+                      fig_path=f"{PAPER_DIR}/fig_4_5_2.png")
 
-    # ---- full-data GLM & GLMM (for the GLM/GLMM heatmaps) ------------------
+    # ---- full-data GLM ------------------------------------------------------
     obs_r, obs_c = np.where(obs_cells)
-    full_long = pd.DataFrame({
-        "VehModel": models[obs_r], "Area": areas[obs_c],
-        "pure_premium": pp_mat[obs_r, obs_c], "exposure": exp_mat[obs_r, obs_c],
-    })
-    full_long["claim"] = full_long["pure_premium"] * full_long["exposure"]
-    _lem_f = float(np.log(full_long["exposure"]).mean())
-    full_long["log_exposure"] = np.log(full_long["exposure"]) - _lem_f  # for GLMM
-    full_long["interaction"] = (full_long["VehModel"].astype(str) + "." +
-                                full_long["Area"].astype(str))
+    full_long = _long_frame(models, areas, obs_r, obs_c, pp_mat, exp_mat)
 
     glm_f = smf.glm("claim ~ C(VehModel) + C(Area)", data=full_long,
                     family=sm.families.Poisson(),
                     offset=np.log(full_long["exposure"])).fit()
 
-    # Fig 4.3.2 -- GLM on observed cells only (white = missing)
+    # Fig 4.3.2 -- GLM observed cells only (white = missing)
     glm_obs = (glm_f.predict(full_long, offset=np.log(full_long["exposure"]))
                / full_long["exposure"]).to_numpy()
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
     visualize_heatmap(_to_df(g_obs),
                       "Estimated Pure Premium Rates -- GLM (white = missing)",
-                      fig_path=f"{PAPER}/fig_4_3_2.png")
+                      fig_path=f"{PAPER_DIR}/fig_4_3_2.png")
 
-    # Fig 4.3.1 -- GLM extrapolated to ALL cells (main-effects extrapolation).
-    # A cell is predictable only if BOTH its vehicle model and its area appear
-    # in the observed data (a completely-unobserved category has no GLM level);
-    # such cells stay white, matching the paper's note on absent categories.
+    # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
+    # BOTH its model and its area appear in the observed data (a completely
+    # unobserved category has no GLM level); such cells stay white.
     gm = np.repeat(np.arange(len(models)), len(areas))
     ga = np.tile(np.arange(len(areas)), len(models))
     all_long = pd.DataFrame({"VehModel": models[gm], "Area": areas[ga]})
@@ -549,44 +314,25 @@ def main():
                             offset=np.log(all_long.loc[predictable, "exposure"]))
               / all_long.loc[predictable, "exposure"]).to_numpy()
         glm_all_flat[predictable] = pr
-    glm_all = glm_all_flat.reshape(len(models), len(areas))
-    visualize_heatmap(_to_df(glm_all),
+    visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
-                      fig_path=f"{PAPER}/fig_4_3_1.png")
+                      fig_path=f"{PAPER_DIR}/fig_4_3_1.png")
 
-    # ---- GLMM on observed cells (reverts to main effects for missing) ------
-    glmm_obs_grid = g_obs  # fallback default
-    try:
-        glmm_f = PoissonBayesMixedGLM.from_formula(
-            "claim ~ C(VehModel) + C(Area) + log_exposure",
-            {"interaction": "0 + C(interaction)"}, full_long).fit_map()
-        lp_f = np.asarray(glmm_f.model.exog @ glmm_f.fe_mean
-                          + glmm_f.model.exog_vc @ glmm_f.vc_mean).ravel()
-        glmm_obs = np.exp(lp_f) / full_long["exposure"].to_numpy()
-        if np.all(np.isfinite(glmm_obs)) and glmm_obs.max() < 1e6:
-            grid = np.full(pp_mat.shape, np.nan)
-            grid[obs_r, obs_c] = glmm_obs
-            glmm_obs_grid = grid
-        else:
-            print("WARN: full-data GLMM unstable; using GLM heatmap for GLMM figures")
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARN: full-data GLMM failed ({exc}); using GLM heatmap for GLMM figures")
+    # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
+    # by glmm_pymc.py -- a fully-converged Bayesian GLMM with uncertainty --
+    # rather than the saturated statsmodels OLRE fit. Run glmm_pymc.py after
+    # this script to (re)generate them.
 
-    # Fig 4.4.1 / 4.4.2 -- GLMM observed cells (extrapolation to missing omitted)
-    visualize_heatmap(_to_df(glmm_obs_grid),
-                      "Estimated Pure Premium Rates -- GLMM (observed cells)",
-                      fig_path=f"{PAPER}/fig_4_4_1.png")
-    visualize_heatmap(_to_df(glmm_obs_grid),
-                      "Estimated Pure Premium Rates -- GLMM (white = missing)",
-                      fig_path=f"{PAPER}/fig_4_4_2.png")
 
-    # -------------------------------------------------------------------------
-    # Summary
-    # -------------------------------------------------------------------------
+def main():
+    pure_premium, pp_mat, exp_mat, obs_cells, W_full = prepare_data()
+    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full)
+    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx)
+
     print("\n================ SUMMARY ================")
-    print(f"best (k, lambda) : ({best_params['k']}, {best_params['lambda']})")
-    print(f"eval test cells  : {n_eval}")
-    print(comparison.to_string())
+    print(f"best (k, lambda) : ({best['k']}, {best['lambda']})")
+    print(f"eval test cells  : {ctx['n_eval']}")
+    print(ctx["comparison"].to_string())
     print("(All three models scored on the identical held-out cells; MF loss is "
           "exposure-weighted to match GLM/GLMM.)")
 
