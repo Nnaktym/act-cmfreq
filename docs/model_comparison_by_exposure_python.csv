@@ -1,9 +1,9 @@
 stratum,model,n,wRMSE,PoissonDev
-sparse (exposure < median),MF (weighted),1034,2024.1870963682543,59406096.55825725
-sparse (exposure < median),CMF (side info),1034,2425.9912276766845,72310518.78115118
-sparse (exposure < median),GLM,1034,2094.0027483921745,40447650.5329515
-sparse (exposure < median),GLMM,1034,2094.0027483921745,40447650.5329515
-dense  (exposure >= median),MF (weighted),1034,1325.0242466610355,450733434.9163223
-dense  (exposure >= median),CMF (side info),1034,1702.3144280018485,215376102.93842363
-dense  (exposure >= median),GLM,1034,993.7141971062143,84889914.64414534
-dense  (exposure >= median),GLMM,1034,993.7141971062143,84889914.64414534
+sparse (exposure < median),MF (weighted),1034,393.2703515378762,40577314.289638996
+sparse (exposure < median),CMF (side info),1034,431.37203068456705,48329460.91464457
+sparse (exposure < median),GLM,1034,343.8689350461607,34052110.485162936
+sparse (exposure < median),GLMM,1034,343.8689350461607,34052110.485162936
+dense  (exposure >= median),MF (weighted),1034,133.89916777076778,38056811.70716078
+dense  (exposure >= median),CMF (side info),1034,171.32476314240594,61237148.81670763
+dense  (exposure >= median),GLM,1034,126.60463671363202,29698149.838232283
+dense  (exposure >= median),GLMM,1034,126.60463671363202,29698149.838232283

@@ -42,6 +42,7 @@ Dependencies: pandas, numpy, matplotlib, cmfrec, statsmodels
 """
 
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -52,7 +53,7 @@ from cmfrec import CMF
 from ratemaking import (
     build_side_info,
     get_prediction,
-    load_standardized_relativity,
+    load_cell_matrix,
     optimize_params,
     poisson_deviance,
     train_test_split,
@@ -99,21 +100,22 @@ def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
 # 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
 
-def prepare_data():
-    """Return (pure_premium df, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
+def prepare_data(target="pure_premium"):
+    """Return (rate df, rate_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
 
-    The target is the DEMOGRAPHICALLY-STANDARDIZED relativity r = claim / E*
-    (E* = exposure x demographic expected claims), so gender / driver-age /
-    vehicle-year mix no longer confounds the model x region comparison. `exp_mat`
-    holds the expected-claims base E* (the credibility weight / GLM offset).
+    The numerator is restricted to collision claims (部分衝突 + 全損衝突);
+    `target="pure_premium"` uses collision claim amount / exposure, and
+    `target="frequency"` uses collision claim count / exposure. `exp_mat`
+    holds the total exposure, serving as the credibility weight / GLM offset.
     """
-    pure_premium, exposure_total = load_standardized_relativity()
+    pure_premium, exposure_total = load_cell_matrix(
+        csv_path="data/brvehins1_full.csv", brand=None, target=target)
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
-    # CMF weights: E* normalized to mean 1 over observed cells, so the weighted
-    # loss stays on the same scale as the unweighted one and the tuned lambda
-    # remains meaningful.
+    # CMF weights: exposure normalized to mean 1 over observed cells, so the
+    # weighted loss stays on the same scale as the unweighted one and the tuned
+    # lambda remains meaningful.
     obs_cells = ~np.isnan(pp_mat)
     mean_exp = float(exp_mat[obs_cells].mean())
     W_full = np.nan_to_num(exp_mat, nan=0.0) / mean_exp
@@ -131,11 +133,12 @@ def prepare_data():
 # 4-6. 分割・チューニング・3手法の同一テストセル比較
 # =============================================================================
 
-def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
+def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="pure_premium"):
     """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM/CMF on one test set.
 
     Returns (best_params, ctx) where ctx carries the arrays the figures need.
     """
+    sfx = "" if target == "pure_premium" else "_freq"
     os.makedirs(FIG_DIR, exist_ok=True)
     os.makedirs(DOCS_DIR, exist_ok=True)
     models = pure_premium.index.to_numpy()
@@ -247,8 +250,8 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
     }).T
     print("\n===== Held-out comparison (identical test cells) =====")
     print(comparison.to_string())
-    comparison.to_csv(f"{DOCS_DIR}/model_comparison_python.csv")
-    print(f"saved {DOCS_DIR}/model_comparison_python.csv")
+    comparison.to_csv(f"{DOCS_DIR}/model_comparison_python{sfx}.csv")
+    print(f"saved {DOCS_DIR}/model_comparison_python{sfx}.csv")
 
     # ---- stratify eval cells by exposure (sparse vs dense) -----------------
     preds = {"MF (weighted)": mf_pred, "CMF (side info)": cmf_pred,
@@ -268,22 +271,25 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
     strat = pd.DataFrame(strat_rows)
     print("\n===== Held-out performance stratified by exposure =====")
     print(strat.to_string(index=False))
-    strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python.csv")
+    strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv", index=False)
+    print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv")
 
     # per-cell predictions (for further diagnostics)
     pd.DataFrame({
         "VehModel": models[er], "Area": areas[ec], "exposure": expw,
         "actual": act, "MF": mf_pred, "CMF": cmf_pred,
         "GLM": glm_pred, "GLMM": glmm_pred,
-    }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_predictions_percell_python.csv")
+    }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python{sfx}.csv", index=False)
+    print(f"saved {DOCS_DIR}/model_predictions_percell_python{sfx}.csv")
 
-    # test-set predicted-vs-true scatter for every model
+    # test-set predicted-vs-true scatter for every model. The axis ceiling is
+    # set from the data (99th pct of observed) so the frequency scale (~0-1)
+    # isn't squashed by a currency-scale default; fall back to 1.0 if all zero.
+    max_lim = float(np.nanpercentile(act, 99)) or 1.0
     for name, pred in preds.items():
         tag = name.split()[0].lower()
-        visualize_scatter_plot(act, pred, name,
-                               fig_path=f"{FIG_DIR}/scatter_test_{tag}.png")
+        visualize_scatter_plot(act, pred, name, max_lim=max_lim,
+                               fig_path=f"{FIG_DIR}/scatter_test_{tag}{sfx}.png")
 
     ctx = {"models": models, "areas": areas, "er": er, "ec": ec,
            "act": act, "mf_pred": mf_pred, "cmf_pred": cmf_pred,
@@ -295,12 +301,17 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
 # 7. 論文用の図を生成  (Regenerate the paper's Figures 4.2.1 .. 4.5.2)
 # =============================================================================
 
-def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx):
+def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx,
+                           target="pure_premium"):
     """Overwrite paper/fig_*.png so the paper reflects THIS Python analysis.
 
     GLM and GLMM are refit on ALL observed cells, matching the paper's final
     (full-data) figures.
     """
+    sfx = "" if target == "pure_premium" else "_freq"
+    # target-aware plot ceiling: currency for pure premium, small for frequency.
+    hmax = float(np.nanpercentile(pp_mat[~np.isnan(pp_mat)], 99)) or 1.0
+    smax = float(np.nanpercentile(ctx["act"], 99)) or 1.0
     os.makedirs(FIG_DIR, exist_ok=True)
     models, areas = ctx["models"], ctx["areas"]
     act, mf_pred = ctx["act"], ctx["mf_pred"]
@@ -320,21 +331,21 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
     # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(_honda(pure_premium), "actual (Honda)",
-                      fig_path=f"{FIG_DIR}/heatmap_actual.png")
+    visualize_heatmap(_honda(pure_premium), "actual (Honda)", max_limit=hmax,
+                      fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
     visualize_heatmap(_honda(_to_df(estimated_mf)), "pred: MF (weighted, Honda)",
-                      fig_path=f"{FIG_DIR}/heatmap_mf.png")
+                      max_limit=hmax, fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
 
     visualize_heatmap(_honda(pure_premium),
                       "Actual Claim Costs by Vehicle Model and Region (Honda)",
-                      fig_path=f"{PAPER_DIR}/fig_4_2_1.png")
-    visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
-                           fig_path=f"{PAPER_DIR}/fig_4_5_1.png")
+                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_2_1{sfx}.png")
+    visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
+                           fig_path=f"{PAPER_DIR}/fig_4_5_1{sfx}.png")
     visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
-                           fig_path=f"{PAPER_DIR}/fig_4_6_1.png")
+                           max_lim=smax, fig_path=f"{PAPER_DIR}/fig_4_6_1{sfx}.png")
     visualize_heatmap(_honda(_to_df(estimated_mf)),
                       "Estimated Pure Premium Rates (Matrix Factorization, Honda)",
-                      fig_path=f"{PAPER_DIR}/fig_4_5_2.png")
+                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_5_2{sfx}.png")
 
     # ---- full-data GLM ------------------------------------------------------
     obs_r, obs_c = np.where(obs_cells)
@@ -351,7 +362,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     g_obs[obs_r, obs_c] = glm_obs
     visualize_heatmap(_honda(_to_df(g_obs)),
                       "Estimated Pure Premium Rates -- GLM (Honda; white = missing)",
-                      fig_path=f"{PAPER_DIR}/fig_4_3_2.png")
+                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_2{sfx}.png")
 
     # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
     # BOTH its model and its area appear in the observed data (a completely
@@ -373,7 +384,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
         glm_all_flat[predictable] = pr
     visualize_heatmap(_honda(_to_df(glm_all_flat.reshape(len(models), len(areas)))),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (Honda, all cells)",
-                      fig_path=f"{PAPER_DIR}/fig_4_3_1.png")
+                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
     # by glmm_pymc.py -- a fully-converged Bayesian GLMM with uncertainty --
@@ -381,12 +392,13 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     # this script to (re)generate them.
 
 
-def main():
-    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data()
-    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat)
-    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx)
+def main(target="pure_premium"):
+    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data(target)
+    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target)
+    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx, target)
 
     print("\n================ SUMMARY ================")
+    print(f"target           : {target}")
     print(f"best (k, lambda) : ({best['k']}, {best['lambda']})")
     print(f"eval test cells  : {ctx['n_eval']}")
     print(ctx["comparison"].to_string())
@@ -395,4 +407,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    target = sys.argv[1] if len(sys.argv) > 1 else "pure_premium"
+    main(target)

@@ -23,6 +23,14 @@ CLAIM_TYPES = [
     "ClaimAmountFire", "ClaimAmountOther",
 ]
 
+# Collision-only components (部分衝突 + 全損衝突). The active analysis targets
+# collision claims: heavy-tail perils (theft/total-loss/fire) dominate the L2
+# loss and "Other" swamps the frequency signal, so restricting the numerator to
+# collision gives a meaningful, well-conditioned target for both pure premium
+# and frequency. CLAIM_TYPES (all 5) is retained only for load_standardized_relativity.
+COLLISION_AMOUNT = ["ClaimAmountPartColl", "ClaimAmountTotColl"]
+COLLISION_NB = ["ClaimNbPartColl", "ClaimNbTotColl"]
+
 
 # =============================================================================
 # Data loading / aggregation
@@ -60,35 +68,64 @@ def get_total(data, category_to_analyze, aggregate_col, threshold=None):
     return total
 
 
-def load_pure_premium(csv_path="data/brvehins_org.csv", brand="Honda",
-                      cell_exposure_min=100, model_exposure_min=10):
-    """Build the vehicle-model x region pure-premium and exposure matrices.
+def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
+                     target="pure_premium", cell_exposure_min=100,
+                     model_exposure_min=10):
+    """Build the vehicle-model x region rate and exposure matrices.
 
-    Reproduces the R preprocessing (Sections 2-3): filter to one brand, sum the
-    claim components, aggregate claims and exposure to a model x region matrix,
-    keep only cells with exposure >= `cell_exposure_min` (others become NaN =
-    missing) and models whose total exposure exceeds `model_exposure_min`.
+    Reproduces the R preprocessing (Sections 2-3): optionally filter to one
+    brand (`brand=None` keeps every manufacturer), aggregate the COLLISION
+    claim numerator and exposure to a model x region matrix, keep only cells
+    with exposure >= `cell_exposure_min` (others become NaN = missing) and
+    models whose total exposure exceeds `model_exposure_min`.
+
+    The numerator is restricted to collision claims (部分衝突 + 全損衝突):
+      * target="pure_premium": numerator = sum(COLLISION_AMOUNT)  (claim amount)
+      * target="frequency":    numerator = sum(COLLISION_NB)      (claim count)
+    Either way the rate is numerator / ExposTotal, and total exposure serves as
+    the credibility weight / GLM offset. Cells whose collision claims are zero
+    (rate = 0) are valid observations, not missing.
 
     Returns
     -------
-    (pure_premium, exposure_total) : both wide DataFrames sharing index/columns.
-        pure_premium = total claim / total exposure (NaN where missing).
+    (rate, exposure_total) : both wide DataFrames sharing index/columns.
     """
+    if target == "pure_premium":
+        num_cols = COLLISION_AMOUNT
+    elif target == "frequency":
+        num_cols = COLLISION_NB
+    else:
+        raise ValueError(f"target must be 'pure_premium' or 'frequency', got {target!r}")
+
     brv = load_bravehins(csv_path)
-    brv = brv[brv["VehModel"].str.contains(brand, na=False)]
-    brv["ClaimTotal"] = brv[CLAIM_TYPES].sum(axis=1)
+    if brand is not None:
+        brv = brv[brv["VehModel"].str.contains(brand, na=False)]
+    brv = brv.copy()
+    brv["Numerator"] = brv[num_cols].sum(axis=1)
 
     cats = ["VehModel", "Area"]
     exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
-    claim_total = get_total(brv, cats, "ClaimTotal")
+    numerator_total = get_total(brv, cats, "Numerator")
 
     keep = exposure_total.sum(axis=1, skipna=True) > model_exposure_min
     exposure_total = exposure_total.loc[keep]
-    claim_total = claim_total.reindex(index=exposure_total.index,
-                                      columns=exposure_total.columns)
+    numerator_total = numerator_total.reindex(index=exposure_total.index,
+                                              columns=exposure_total.columns)
 
-    pure_premium = claim_total / exposure_total
-    return pure_premium, exposure_total
+    rate = numerator_total / exposure_total
+    return rate, exposure_total
+
+
+def load_pure_premium(csv_path="data/brvehins1_full.csv", brand=None,
+                      cell_exposure_min=100, model_exposure_min=10):
+    """Collision pure-premium rate matrix -- thin wrapper over load_cell_matrix.
+
+    Kept so existing imports (`from ratemaking import load_pure_premium`) stay
+    valid. Returns (pure_premium, exposure_total).
+    """
+    return load_cell_matrix(csv_path=csv_path, brand=brand, target="pure_premium",
+                            cell_exposure_min=cell_exposure_min,
+                            model_exposure_min=model_exposure_min)
 
 
 def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
