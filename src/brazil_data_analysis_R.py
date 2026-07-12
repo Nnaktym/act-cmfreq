@@ -100,16 +100,19 @@ def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
 # 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
 
-def prepare_data(target="pure_premium"):
+def prepare_data(target="pure_premium", cell_exposure_min=100):
     """Return (rate df, rate_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
 
     The numerator is restricted to collision claims (部分衝突 + 全損衝突);
     `target="pure_premium"` uses collision claim amount / exposure, and
     `target="frequency"` uses collision claim count / exposure. `exp_mat`
     holds the total exposure, serving as the credibility weight / GLM offset.
+    `cell_exposure_min` is the exposure floor below which a cell is treated as
+    missing (default 100; varied only for the sensitivity analysis).
     """
     pure_premium, exposure_total = load_cell_matrix(
-        csv_path="data/brvehins1_full.csv", brand=None, target=target)
+        csv_path="data/brvehins1_full.csv", brand=None, target=target,
+        cell_exposure_min=cell_exposure_min)
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
@@ -133,10 +136,14 @@ def prepare_data(target="pure_premium"):
 # 4-6. 分割・チューニング・3手法の同一テストセル比較
 # =============================================================================
 
-def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="pure_premium"):
+def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="pure_premium",
+                   write=True):
     """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM/CMF on one test set.
 
     Returns (best_params, ctx) where ctx carries the arrays the figures need.
+    `write=False` suppresses all docs/figure output (used by the sensitivity
+    analysis so it never clobbers the canonical results); the comparison and
+    stratified tables are still returned in ctx.
     """
     sfx = "" if target == "pure_premium" else "_freq"
     os.makedirs(FIG_DIR, exist_ok=True)
@@ -250,8 +257,9 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="
     }).T
     print("\n===== Held-out comparison (identical test cells) =====")
     print(comparison.to_string())
-    comparison.to_csv(f"{DOCS_DIR}/model_comparison_python{sfx}.csv")
-    print(f"saved {DOCS_DIR}/model_comparison_python{sfx}.csv")
+    if write:
+        comparison.to_csv(f"{DOCS_DIR}/model_comparison_python{sfx}.csv")
+        print(f"saved {DOCS_DIR}/model_comparison_python{sfx}.csv")
 
     # ---- stratify eval cells by exposure (sparse vs dense) -----------------
     preds = {"MF (weighted)": mf_pred, "CMF (side info)": cmf_pred,
@@ -271,29 +279,31 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="
     strat = pd.DataFrame(strat_rows)
     print("\n===== Held-out performance stratified by exposure =====")
     print(strat.to_string(index=False))
-    strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv")
+    if write:
+        strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv", index=False)
+        print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv")
 
-    # per-cell predictions (for further diagnostics)
-    pd.DataFrame({
-        "VehModel": models[er], "Area": areas[ec], "exposure": expw,
-        "actual": act, "MF": mf_pred, "CMF": cmf_pred,
-        "GLM": glm_pred, "GLMM": glmm_pred,
-    }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python{sfx}.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_predictions_percell_python{sfx}.csv")
+    if write:
+        # per-cell predictions (for further diagnostics)
+        pd.DataFrame({
+            "VehModel": models[er], "Area": areas[ec], "exposure": expw,
+            "actual": act, "MF": mf_pred, "CMF": cmf_pred,
+            "GLM": glm_pred, "GLMM": glmm_pred,
+        }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python{sfx}.csv", index=False)
+        print(f"saved {DOCS_DIR}/model_predictions_percell_python{sfx}.csv")
 
-    # test-set predicted-vs-true scatter for every model. The axis ceiling is
-    # set from the data (99th pct of observed) so the frequency scale (~0-1)
-    # isn't squashed by a currency-scale default; fall back to 1.0 if all zero.
-    max_lim = float(np.nanpercentile(act, 99)) or 1.0
-    for name, pred in preds.items():
-        tag = name.split()[0].lower()
-        visualize_scatter_plot(act, pred, name, max_lim=max_lim,
-                               fig_path=f"{FIG_DIR}/scatter_test_{tag}{sfx}.png")
+        # test-set predicted-vs-true scatter for every model. The axis ceiling is
+        # set from the data (99th pct of observed) so the frequency scale (~0-1)
+        # isn't squashed by a currency-scale default; fall back to 1.0 if all zero.
+        max_lim = float(np.nanpercentile(act, 99)) or 1.0
+        for name, pred in preds.items():
+            tag = name.split()[0].lower()
+            visualize_scatter_plot(act, pred, name, max_lim=max_lim,
+                                   fig_path=f"{FIG_DIR}/scatter_test_{tag}{sfx}.png")
 
     ctx = {"models": models, "areas": areas, "er": er, "ec": ec,
            "act": act, "mf_pred": mf_pred, "cmf_pred": cmf_pred,
-           "comparison": comparison, "n_eval": n_eval}
+           "comparison": comparison, "strat": strat, "n_eval": n_eval}
     return best, ctx
 
 
