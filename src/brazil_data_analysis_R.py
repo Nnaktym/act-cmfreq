@@ -68,12 +68,15 @@ W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25  # legacy fixed weights (now CV-tuned)
 # U/I attributes progressively less/more), searched with a compact k grid.
 WEIGHT_GRID = [(1.0, 0.05, 0.05), (1.0, 0.15, 0.15),
                (1.0, 0.25, 0.25), (1.0, 0.5, 0.5)]
-CMF_WEIGHT_K_GRID = range(2, 31, 3)
+CMF_WEIGHT_K_GRID = range(2, 41, 3)
 
 FIG_DIR = "figs/python_port"
 PAPER_DIR = "paper"
 DOCS_DIR = "docs"
-K_GRID = range(2, 31)
+# Latent-factor grid. The rank is bounded by the smaller matrix dimension (40
+# regions): for k > 40 the item factor matrix (40 x k) is over-parameterized and
+# adds no representational capacity, so the search tops out at 40.
+K_GRID = range(2, 41)
 LAMBDA_GRID = [0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000]
 
 
