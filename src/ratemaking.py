@@ -91,7 +91,7 @@ def load_pure_premium(csv_path="data/brvehins_org.csv", brand="Honda",
     return pure_premium, exposure_total
 
 
-def load_standardized_relativity(csv_path="data/brvehins_org.csv", brand="Honda",
+def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
                                  cell_exposure_min=100, model_exposure_min=10):
     """Build a demographically-standardized vehicle-model x region risk matrix.
 
@@ -118,42 +118,58 @@ def load_standardized_relativity(csv_path="data/brvehins_org.csv", brand="Honda"
     Returns (relativity, expected_base): a drop-in replacement for the
     (pure_premium, exposure_total) pair returned by load_pure_premium().
     """
-    import statsmodels.api as sm
-    import statsmodels.formula.api as smf
+    from sklearn.linear_model import PoissonRegressor
+    from sklearn.preprocessing import OneHotEncoder
 
     claim_nb = ["ClaimNbRob", "ClaimNbPartColl", "ClaimNbTotColl",
                 "ClaimNbFire", "ClaimNbOther"]
     brv = load_bravehins(csv_path)
-    brv = brv[brv["VehModel"].str.contains(brand, na=False)].copy()
+    if brand is not None:
+        brv = brv[brv["VehModel"].str.contains(brand, na=False)].copy()
     brv["ClaimTotal"] = brv[CLAIM_TYPES].sum(axis=1)
     brv["ClaimNbTotal"] = brv[claim_nb].sum(axis=1)
     brv = brv[brv["ExposTotal"] > 0].copy()
-    brv["log_expo"] = np.log(brv["ExposTotal"])
     # missing demographics -> explicit "Unknown" level so every record keeps an
     # E* (dropping would lose exposure and leave those cells un-aggregatable)
     brv["Gender"] = brv["Gender"].fillna("Unknown")
     brv["DrivAge"] = brv["DrivAge"].fillna("Unknown")
 
-    # record-level demographic FREQUENCY GLM (claim counts, Poisson) -> stable,
-    # standard for a-priori relativities. We control for coarse vehicle risk via
-    # VehGroup (9 levels) and Area so the demographic relativities are de-biased,
-    # then strip those out to leave a demographic-adjusted "equivalent exposure".
-    # (A Poisson fit on claim AMOUNTS diverges here; frequency is the natural,
-    # stable choice and captures the dominant demographic risk differences.)
-    demo = smf.glm(
-        "ClaimNbTotal ~ C(Gender) + C(DrivAge) + C(VehYear) + C(VehGroup) + C(Area)",
-        data=brv, family=sm.families.Poisson(), offset=brv["log_expo"],
-    ).fit()
+    # demographic FREQUENCY GLM (claim counts, Poisson) -> stable, standard for
+    # a-priori relativities. We control for coarse vehicle risk via VehGroup and
+    # for Area so the demographic relativities are de-biased, then strip those
+    # out to leave a demographic-adjusted "equivalent exposure". (A Poisson fit
+    # on claim AMOUNTS diverges here; frequency is the natural, stable choice.)
+    #
+    # Poisson is closed under aggregation of identical-covariate records, so we
+    # fit on counts COLLAPSED to the unique (Gender, DrivAge, VehYear, VehGroup,
+    # Area) combos. We fit with a SPARSE one-hot design (scikit-learn) rather than
+    # statsmodels' dense patsy matrix: with a 436-level VehGroup on the full ~2M
+    # -row multi-brand data the dense design is ~550 wide and blows up memory,
+    # whereas the sparse one has only 5 non-zeros per row. Fitting the rate
+    # y = count / exposure with sample_weight = exposure reproduces the offset
+    # -Poisson MLE exactly; a tiny L2 (alpha) just resolves the one-hot collinearity.
+    gcols = ["Gender", "DrivAge", "VehYear", "VehGroup", "Area"]
+    agg = (brv.groupby(gcols, observed=True)
+              .agg(ClaimNbTotal=("ClaimNbTotal", "sum"),
+                   ExposTotal=("ExposTotal", "sum")).reset_index())
+    agg = agg[agg["ExposTotal"] > 0]
+    enc = OneHotEncoder(handle_unknown="ignore", dtype=np.float64)
+    X = enc.fit_transform(agg[gcols].astype(str))
+    demo = PoissonRegressor(alpha=1e-8, fit_intercept=True, max_iter=1000)
+    demo.fit(X, agg["ClaimNbTotal"] / agg["ExposTotal"],
+             sample_weight=agg["ExposTotal"].to_numpy())
 
-    # E* = exposure x exp(intercept + demographics): predict expected counts with
-    # vehicle group & area forced to their reference level so only exposure +
-    # demographics survive. r = sum(claim amount) / sum(E*) is then a pure-premium
-    # relativity per unit demographic-adjusted exposure (model x region signal
-    # preserved).
-    ref = brv.copy()
-    ref["VehGroup"] = sorted(brv["VehGroup"].dropna().unique())[0]
-    ref["Area"] = sorted(brv["Area"].dropna().unique())[0]
-    brv["expected_base"] = demo.predict(ref, offset=brv["log_expo"]).to_numpy()
+    # E* = exposure x rate, with VehGroup & Area forced to their reference level
+    # so only exposure + demographics survive. The predicted rate then depends
+    # ONLY on (Gender, DrivAge, VehYear) -> a small lookup we predict once and
+    # broadcast onto every record (memory-light for millions of rows).
+    ref_keys = ["Gender", "DrivAge", "VehYear"]
+    rate_tbl = brv[ref_keys].drop_duplicates().copy()
+    rate_tbl["VehGroup"] = sorted(brv["VehGroup"].dropna().unique())[0]
+    rate_tbl["Area"] = sorted(brv["Area"].dropna().unique())[0]
+    rate_tbl["rate"] = demo.predict(enc.transform(rate_tbl[gcols].astype(str)))
+    brv = brv.merge(rate_tbl[ref_keys + ["rate"]], on=ref_keys, how="left")
+    brv["expected_base"] = brv["ExposTotal"] * brv["rate"]
 
     cats = ["VehModel", "Area"]
     exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
@@ -181,15 +197,17 @@ def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=
     return long_df
 
 
-def build_side_info(pure_premium, csv_path="data/brvehins_org.csv",
-                    density_path="data/brazil_population_density.csv",
-                    density_quantile=0.7):
+def build_side_info(pure_premium, csv_path="data/brvehins1_full.csv",
+                    density_path="data/brazil_population_density.csv"):
     """Build row/column side-information matrices for Collective MF (CMF).
 
     Row side info: one-hot of the vehicle model's VehGroup (e.g. "Honda Civic",
     "Honda Cr-v") — an observable grouping that grounds the latent row factors
     and supplies an attribute basis for sparse/cold-start models. Column side
-    info: one-hot of an urban/rural class derived from area population density.
+    info: the area's population density (IBGE Censo 2022), log-scaled and
+    standardized to mean 0 / sd 1 across areas. Density spans ~2.5–493 hab/km²,
+    so log first; feeding the continuous value (rather than a thresholded
+    urban/rural dummy) uses the actual figures and avoids an arbitrary cutoff.
 
     Both matrices are aligned to `pure_premium`'s index (vehicle models) and
     columns (areas). Returns (U, I, u_labels, i_labels) with U, I as float
@@ -204,11 +222,13 @@ def build_side_info(pure_premium, csv_path="data/brvehins_org.csv",
     U = pd.get_dummies(vg, dummy_na=True).astype(float)
 
     dens = pd.read_csv(density_path)
-    thr = dens["density_km2"].quantile(density_quantile)
-    dens["pop_density_class"] = np.where(dens["density_km2"] > thr, "urban", "rural")
-    dmap = (dens.drop_duplicates("Area").set_index("Area")["pop_density_class"]
-            .reindex(areas))
-    I = pd.get_dummies(dmap, dummy_na=True).astype(float)
+    d = (dens.drop_duplicates("Area").set_index("Area")["density_km2"]
+         .reindex(areas).astype(float))
+    logd = np.log(d)
+    # standardize over observed areas; any unmatched area -> 0 (population mean)
+    z = (logd - logd.mean()) / logd.std(ddof=0)
+    z = z.fillna(0.0)
+    I = pd.DataFrame({"log_pop_density_z": z.to_numpy()}, index=areas)
 
     return (U.to_numpy(dtype=float), I.to_numpy(dtype=float),
             list(U.columns), list(I.columns))

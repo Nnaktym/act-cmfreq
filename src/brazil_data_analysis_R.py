@@ -62,7 +62,12 @@ from ratemaking import (
 )
 
 # CMF side-information weights (attributes secondary to the claim matrix).
-W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25
+W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25  # legacy fixed weights (now CV-tuned)
+# side-info weight grid for CMF (main matrix anchored at 1.0; try trusting the
+# U/I attributes progressively less/more), searched with a compact k grid.
+WEIGHT_GRID = [(1.0, 0.05, 0.05), (1.0, 0.15, 0.15),
+               (1.0, 0.25, 0.25), (1.0, 0.5, 0.5)]
+CMF_WEIGHT_K_GRID = range(2, 31, 3)
 
 FIG_DIR = "figs/python_port"
 PAPER_DIR = "paper"
@@ -118,7 +123,7 @@ def prepare_data():
     U_mat, I_mat, u_labels, i_labels = build_side_info(pure_premium)
     print(f"pure_premium matrix: {pp_mat.shape}, observed cells: {obs_cells.sum()}")
     print(f"side info: U {U_mat.shape} ({len(u_labels)} vehicle groups), "
-          f"I {I_mat.shape} ({len(i_labels)} density classes)")
+          f"I {I_mat.shape} ({len(i_labels)} density feature)")
     return pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat
 
 
@@ -163,18 +168,32 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
     mf = _fit_weighted_mf(X_train, W_full, best)
     mf_pred = np.asarray(mf.predict(user=er, item=ec), dtype=float)
 
-    # ---- CMF with side information (VehGroup + urban/rural density) ---------
+    # ---- CMF with side information (VehGroup + population density) ----------
     # Same corrected protocol (split-before-tune, exposure-weighted, non-centered).
     # The attributes ground the latent factors and let sparse/unseen rows borrow
     # strength from their group instead of relying on the latent factors alone.
+    # We TUNE the side-info weights (how much the loss trusts U/I vs the main
+    # matrix) by CV alongside (k, lambda): the fixed 0.5/0.25/0.25 over-weighted
+    # the attributes and hurt well-observed cells. The weight search uses a
+    # compact k grid to stay affordable; the winning weights then get the full
+    # (k, lambda) grid for the final fit. Selection is on the main-matrix CV RMSE.
+    best_cmf, best_w = None, None
+    for wm, wu, wi in WEIGHT_GRID:
+        cand = optimize_params(X_train, n_folds=4, k_values=CMF_WEIGHT_K_GRID,
+                               lambda_values=LAMBDA_GRID, W=W_full, U=U_mat, I=I_mat,
+                               w_main=wm, w_user=wu, w_item=wi)
+        print(f"CMF weights (main,user,item)=({wm},{wu},{wi}) -> {cand}")
+        if best_cmf is None or cand["cv_score"] < best_cmf["cv_score"]:
+            best_cmf, best_w = cand, (wm, wu, wi)
+    wm, wu, wi = best_w
+    # refine (k, lambda) at the chosen weights on the full grid
     best_cmf = optimize_params(X_train, n_folds=4, k_values=K_GRID,
-                               lambda_values=LAMBDA_GRID, W=W_full,
-                               U=U_mat, I=I_mat,
-                               w_main=W_MAIN, w_user=W_USER, w_item=W_ITEM)
-    print("best_params (CMF+side info):", best_cmf)
+                               lambda_values=LAMBDA_GRID, W=W_full, U=U_mat, I=I_mat,
+                               w_main=wm, w_user=wu, w_item=wi)
+    print(f"best_params (CMF+side info): {best_cmf}  weights(m,u,i)={best_w}")
     cmf = CMF(k=best_cmf["k"], lambda_=best_cmf["lambda"], method="als", niter=30,
               nonneg=True, verbose=False, center=False,
-              w_main=W_MAIN, w_user=W_USER, w_item=W_ITEM).fit(
+              w_main=wm, w_user=wu, w_item=wi).fit(
                   X_train, W=W_full, U=U_mat, I=I_mat)
     cmf_pred = np.asarray(cmf.predict(user=er, item=ec), dtype=float)
 
@@ -288,21 +307,30 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
 
+    # The model is fit on ALL manufacturers, but the full matrix (~1000 rows) is
+    # unreadable as a heatmap, so heatmaps are restricted to the Honda models
+    # (the paper's running example). Scatters stay on the full eval set.
+    honda = pure_premium.index.to_series().str.contains("Honda", na=False).to_numpy()
+    def _honda(df):
+        return df.loc[df.index[honda]]
+
     # ---- MF: full-data refit -> all-cell estimates -------------------------
     mf_full = _fit_weighted_mf(pp_mat, W_full, best)
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
     # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(pure_premium, "actual", fig_path=f"{FIG_DIR}/heatmap_actual.png")
-    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)",
+    visualize_heatmap(_honda(pure_premium), "actual (Honda)",
+                      fig_path=f"{FIG_DIR}/heatmap_actual.png")
+    visualize_heatmap(_honda(_to_df(estimated_mf)), "pred: MF (weighted, Honda)",
                       fig_path=f"{FIG_DIR}/heatmap_mf.png")
 
-    visualize_heatmap(pure_premium, "Actual Claim Costs by Vehicle Model and Region",
+    visualize_heatmap(_honda(pure_premium),
+                      "Actual Claim Costs by Vehicle Model and Region (Honda)",
                       fig_path=f"{PAPER_DIR}/fig_4_2_1.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
                            fig_path=f"{PAPER_DIR}/fig_4_5_1.png")
-    visualize_heatmap(_to_df(estimated_mf),
-                      "Estimated Pure Premium Rates (Matrix Factorization)",
+    visualize_heatmap(_honda(_to_df(estimated_mf)),
+                      "Estimated Pure Premium Rates (Matrix Factorization, Honda)",
                       fig_path=f"{PAPER_DIR}/fig_4_5_2.png")
 
     # ---- full-data GLM ------------------------------------------------------
@@ -318,8 +346,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                / full_long["exposure"]).to_numpy()
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
-    visualize_heatmap(_to_df(g_obs),
-                      "Estimated Pure Premium Rates -- GLM (white = missing)",
+    visualize_heatmap(_honda(_to_df(g_obs)),
+                      "Estimated Pure Premium Rates -- GLM (Honda; white = missing)",
                       fig_path=f"{PAPER_DIR}/fig_4_3_2.png")
 
     # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
@@ -340,8 +368,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                             offset=np.log(all_long.loc[predictable, "exposure"]))
               / all_long.loc[predictable, "exposure"]).to_numpy()
         glm_all_flat[predictable] = pr
-    visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
-                      "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
+    visualize_heatmap(_honda(_to_df(glm_all_flat.reshape(len(models), len(areas)))),
+                      "Predicted Pure Premium Rates -- Main-Effects GLM (Honda, all cells)",
                       fig_path=f"{PAPER_DIR}/fig_4_3_1.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
