@@ -286,7 +286,8 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
                                fig_path=f"{FIG_DIR}/scatter_test_{tag}.png")
 
     ctx = {"models": models, "areas": areas, "er": er, "ec": ec,
-           "act": act, "mf_pred": mf_pred, "comparison": comparison, "n_eval": n_eval}
+           "act": act, "mf_pred": mf_pred, "cmf_pred": cmf_pred,
+           "comparison": comparison, "n_eval": n_eval}
     return best, ctx
 
 
@@ -329,6 +330,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                       fig_path=f"{PAPER_DIR}/fig_4_2_1.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
                            fig_path=f"{PAPER_DIR}/fig_4_5_1.png")
+    visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
+                           fig_path=f"{PAPER_DIR}/fig_4_6_1.png")
     visualize_heatmap(_honda(_to_df(estimated_mf)),
                       "Estimated Pure Premium Rates (Matrix Factorization, Honda)",
                       fig_path=f"{PAPER_DIR}/fig_4_5_2.png")
