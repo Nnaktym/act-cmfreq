@@ -91,6 +91,87 @@ def load_pure_premium(csv_path="data/brvehins_org.csv", brand="Honda",
     return pure_premium, exposure_total
 
 
+def load_standardized_relativity(csv_path="data/brvehins_org.csv", brand="Honda",
+                                 cell_exposure_min=100, model_exposure_min=10):
+    """Build a demographically-standardized vehicle-model x region risk matrix.
+
+    The raw cell pure premium (load_pure_premium) confounds model x region risk
+    with each cell's gender / driver-age / vehicle-year MIX, which varies
+    strongly across cells (per-cell male-exposure share ranges 0..1). To isolate
+    the model x region signal, we first fit a record-level Poisson GLM on those
+    demographic factors -- controlling for model/area so the demographic
+    relativities are unbiased -- then form a demographic *expected-claims* base
+
+        E*_record = exposure x exp(intercept + demographic linear predictor)
+
+    by predicting with VehModel and Area held at their reference level. The cell
+    target becomes the standardized relativity  r_ij = sum(claim) / sum(E*), and
+    E* replaces exposure as the credibility weight / GLM offset. Demographic mix
+    is thereby removed identically for every downstream model (GLM/GLMM/MF/CMF),
+    so the comparison reflects the model x region interaction, not who happens to
+    drive those cars in those regions.
+
+    Assumption: demographics act multiplicatively and do not interact with the
+    model x region cell (no three-way interaction) -- the standard working
+    assumption for a-priori relativity offsets.
+
+    Returns (relativity, expected_base): a drop-in replacement for the
+    (pure_premium, exposure_total) pair returned by load_pure_premium().
+    """
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    claim_nb = ["ClaimNbRob", "ClaimNbPartColl", "ClaimNbTotColl",
+                "ClaimNbFire", "ClaimNbOther"]
+    brv = load_bravehins(csv_path)
+    brv = brv[brv["VehModel"].str.contains(brand, na=False)].copy()
+    brv["ClaimTotal"] = brv[CLAIM_TYPES].sum(axis=1)
+    brv["ClaimNbTotal"] = brv[claim_nb].sum(axis=1)
+    brv = brv[brv["ExposTotal"] > 0].copy()
+    brv["log_expo"] = np.log(brv["ExposTotal"])
+    # missing demographics -> explicit "Unknown" level so every record keeps an
+    # E* (dropping would lose exposure and leave those cells un-aggregatable)
+    brv["Gender"] = brv["Gender"].fillna("Unknown")
+    brv["DrivAge"] = brv["DrivAge"].fillna("Unknown")
+
+    # record-level demographic FREQUENCY GLM (claim counts, Poisson) -> stable,
+    # standard for a-priori relativities. We control for coarse vehicle risk via
+    # VehGroup (9 levels) and Area so the demographic relativities are de-biased,
+    # then strip those out to leave a demographic-adjusted "equivalent exposure".
+    # (A Poisson fit on claim AMOUNTS diverges here; frequency is the natural,
+    # stable choice and captures the dominant demographic risk differences.)
+    demo = smf.glm(
+        "ClaimNbTotal ~ C(Gender) + C(DrivAge) + C(VehYear) + C(VehGroup) + C(Area)",
+        data=brv, family=sm.families.Poisson(), offset=brv["log_expo"],
+    ).fit()
+
+    # E* = exposure x exp(intercept + demographics): predict expected counts with
+    # vehicle group & area forced to their reference level so only exposure +
+    # demographics survive. r = sum(claim amount) / sum(E*) is then a pure-premium
+    # relativity per unit demographic-adjusted exposure (model x region signal
+    # preserved).
+    ref = brv.copy()
+    ref["VehGroup"] = sorted(brv["VehGroup"].dropna().unique())[0]
+    ref["Area"] = sorted(brv["Area"].dropna().unique())[0]
+    brv["expected_base"] = demo.predict(ref, offset=brv["log_expo"]).to_numpy()
+
+    cats = ["VehModel", "Area"]
+    exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
+    claim_total = get_total(brv, cats, "ClaimTotal")
+    ebase_total = get_total(brv, cats, "expected_base")
+
+    keep = exposure_total.sum(axis=1, skipna=True) > model_exposure_min
+    exposure_total = exposure_total.loc[keep]
+    idx, cols = exposure_total.index, exposure_total.columns
+    claim_total = claim_total.reindex(index=idx, columns=cols)
+    ebase_total = ebase_total.reindex(index=idx, columns=cols)
+
+    # relativity, missing exactly where the cell has too little exposure (<min)
+    relativity = (claim_total / ebase_total).mask(exposure_total.isna())
+    ebase_total = ebase_total.mask(exposure_total.isna())
+    return relativity, ebase_total
+
+
 def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=True):
     """Melt a wide matrix to long format (cf. cmf.R::wide_to_long_format)."""
     long_df = wide_df.reset_index().melt(id_vars=wide_df.index.name)
@@ -98,6 +179,39 @@ def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=
     if na_omit:
         long_df = long_df.dropna()
     return long_df
+
+
+def build_side_info(pure_premium, csv_path="data/brvehins_org.csv",
+                    density_path="data/brazil_population_density.csv",
+                    density_quantile=0.7):
+    """Build row/column side-information matrices for Collective MF (CMF).
+
+    Row side info: one-hot of the vehicle model's VehGroup (e.g. "Honda Civic",
+    "Honda Cr-v") — an observable grouping that grounds the latent row factors
+    and supplies an attribute basis for sparse/cold-start models. Column side
+    info: one-hot of an urban/rural class derived from area population density.
+
+    Both matrices are aligned to `pure_premium`'s index (vehicle models) and
+    columns (areas). Returns (U, I, u_labels, i_labels) with U, I as float
+    numpy arrays of shape (n_models, p_u) and (n_areas, p_i).
+    """
+    models = pure_premium.index
+    areas = pure_premium.columns
+
+    raw = load_bravehins(csv_path)
+    vg = (raw[["VehModel", "VehGroup"]].drop_duplicates()
+          .set_index("VehModel")["VehGroup"].reindex(models))
+    U = pd.get_dummies(vg, dummy_na=True).astype(float)
+
+    dens = pd.read_csv(density_path)
+    thr = dens["density_km2"].quantile(density_quantile)
+    dens["pop_density_class"] = np.where(dens["density_km2"] > thr, "urban", "rural")
+    dmap = (dens.drop_duplicates("Area").set_index("Area")["pop_density_class"]
+            .reindex(areas))
+    I = pd.get_dummies(dmap, dummy_na=True).astype(float)
+
+    return (U.to_numpy(dtype=float), I.to_numpy(dtype=float),
+            list(U.columns), list(I.columns))
 
 
 # =============================================================================
@@ -162,13 +276,17 @@ def get_prediction(model, X):
     return X_pred
 
 
-def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None):
+def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None,
+                    U=None, I=None, w_main=1.0, w_user=1.0, w_item=1.0):
     """CV grid search over (k, lambda) for CMF (cf. cmf.R::optimize_params).
 
     If `W` (per-cell weights, same shape as X) is given, the CMF loss is
     weighted -- so the tuned lambda is calibrated for the SAME weighted loss
     used in the final fit (otherwise a weighted final fit would be effectively
-    unregularized). Returns the best row as {"k", "lambda", "cv_score"}.
+    unregularized). If `U` / `I` (row / column side-information matrices) are
+    given, the search tunes the Collective MF variant with those attributes,
+    using the same w_main/w_user/w_item weighting as the final fit so the tuned
+    (k, lambda) transfer. Returns the best row as {"k", "lambda", "cv_score"}.
     """
     cv_split = k_fold_split(X, k=n_folds, seed=random_seed)
     records = []
@@ -181,7 +299,8 @@ def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None
                 model = CMF(
                     k=k, lambda_=lam, method="als", niter=30,
                     nonneg=True, verbose=False, center=False,
-                ).fit(X_train, W=W)
+                    w_main=w_main, w_user=w_user, w_item=w_item,
+                ).fit(X_train, W=W, U=U, I=I)
                 pred = get_prediction(model, X_val)
                 cv_score += calc_rmse(pred, X_val, show=False) / n_folds
             print(f"k: {k} lambda: {lam} CV RMSE: {cv_score}")

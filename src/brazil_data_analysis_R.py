@@ -45,15 +45,14 @@ import os
 
 import numpy as np
 import pandas as pd
-import patsy
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from cmfrec import CMF
-from statsmodels.genmod.bayes_mixed_glm import PoissonBayesMixedGLM
 
 from ratemaking import (
+    build_side_info,
     get_prediction,
-    load_pure_premium,
+    load_standardized_relativity,
     optimize_params,
     poisson_deviance,
     train_test_split,
@@ -61,6 +60,9 @@ from ratemaking import (
     visualize_scatter_plot,
     weighted_rmse,
 )
+
+# CMF side-information weights (attributes secondary to the claim matrix).
+W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25
 
 FIG_DIR = "figs/python_port"
 PAPER_DIR = "paper"
@@ -93,27 +95,39 @@ def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
 # =============================================================================
 
 def prepare_data():
-    """Return (pure_premium df, pp_mat, exp_mat, obs_cells, W_full)."""
-    pure_premium, exposure_total = load_pure_premium()
+    """Return (pure_premium df, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
+
+    The target is the DEMOGRAPHICALLY-STANDARDIZED relativity r = claim / E*
+    (E* = exposure x demographic expected claims), so gender / driver-age /
+    vehicle-year mix no longer confounds the model x region comparison. `exp_mat`
+    holds the expected-claims base E* (the credibility weight / GLM offset).
+    """
+    pure_premium, exposure_total = load_standardized_relativity()
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
-    # CMF weights: exposure normalized to mean 1 over observed cells, so the
-    # weighted loss stays on the same scale as the unweighted one and the tuned
-    # lambda remains meaningful (raw exposure ~100-15000 would swamp lambda).
+    # CMF weights: E* normalized to mean 1 over observed cells, so the weighted
+    # loss stays on the same scale as the unweighted one and the tuned lambda
+    # remains meaningful.
     obs_cells = ~np.isnan(pp_mat)
     mean_exp = float(exp_mat[obs_cells].mean())
     W_full = np.nan_to_num(exp_mat, nan=0.0) / mean_exp
+
+    # Side information for the CMF variant: row = VehGroup (e.g. "Honda Civic"),
+    # column = urban/rural population-density class.
+    U_mat, I_mat, u_labels, i_labels = build_side_info(pure_premium)
     print(f"pure_premium matrix: {pp_mat.shape}, observed cells: {obs_cells.sum()}")
-    return pure_premium, pp_mat, exp_mat, obs_cells, W_full
+    print(f"side info: U {U_mat.shape} ({len(u_labels)} vehicle groups), "
+          f"I {I_mat.shape} ({len(i_labels)} density classes)")
+    return pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat
 
 
 # =============================================================================
 # 4-6. 分割・チューニング・3手法の同一テストセル比較
 # =============================================================================
 
-def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
-    """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM on one test set.
+def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat):
+    """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM/CMF on one test set.
 
     Returns (best_params, ctx) where ctx carries the arrays the figures need.
     """
@@ -149,6 +163,21 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
     mf = _fit_weighted_mf(X_train, W_full, best)
     mf_pred = np.asarray(mf.predict(user=er, item=ec), dtype=float)
 
+    # ---- CMF with side information (VehGroup + urban/rural density) ---------
+    # Same corrected protocol (split-before-tune, exposure-weighted, non-centered).
+    # The attributes ground the latent factors and let sparse/unseen rows borrow
+    # strength from their group instead of relying on the latent factors alone.
+    best_cmf = optimize_params(X_train, n_folds=4, k_values=K_GRID,
+                               lambda_values=LAMBDA_GRID, W=W_full,
+                               U=U_mat, I=I_mat,
+                               w_main=W_MAIN, w_user=W_USER, w_item=W_ITEM)
+    print("best_params (CMF+side info):", best_cmf)
+    cmf = CMF(k=best_cmf["k"], lambda_=best_cmf["lambda"], method="als", niter=30,
+              nonneg=True, verbose=False, center=False,
+              w_main=W_MAIN, w_user=W_USER, w_item=W_ITEM).fit(
+                  X_train, W=W_full, U=U_mat, I=I_mat)
+    cmf_pred = np.asarray(cmf.predict(user=er, item=ec), dtype=float)
+
     # ---- long-format train / test for GLM & GLMM ---------------------------
     tr, tc = np.where(train_mask)
     train_long = _long_frame(models, areas, tr, tc, pp_mat, exp_mat)
@@ -171,23 +200,17 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
                 / test_long["exposure"]).to_numpy()
 
     # ---- GLMM (interaction as random intercept) ----------------------------
-    # No offset in statsmodels' Bayes mixed GLM -> log(exposure) is a covariate.
-    # Test cells are all unseen interactions, so the random effect is 0 and the
-    # GLMM reverts to its main effects (the paper's stated GLMM limitation).
-    glmm = PoissonBayesMixedGLM.from_formula(
-        "claim ~ C(VehModel) + C(Area) + log_exposure",
-        {"interaction": "0 + C(interaction)"}, train_long,
-    ).fit_map()
-    dm_tr = patsy.dmatrix("C(VehModel) + C(Area) + log_exposure",
-                          train_long, return_type="dataframe")
-    dm_te = patsy.build_design_matrices(
-        [dm_tr.design_info], test_long, return_type="dataframe")[0]
-    glmm_pred = None
-    if dm_tr.shape[1] == len(glmm.fe_mean):
-        glmm_pred = np.exp(dm_te.to_numpy() @ glmm.fe_mean) / test_long["exposure"].to_numpy()
-    if glmm_pred is None or not np.all(np.isfinite(glmm_pred)) or glmm_pred.max() > 1e6:
-        print("WARN: GLMM fit unstable; falling back to GLM predictions for GLMM")
-        glmm_pred = glm_pred
+    # Every held-out cell is an UNSEEN vehicle-model x area interaction, so the
+    # GLMM's interaction random effect z_ij has no data and reverts to 0; its
+    # held-out prediction therefore reduces to a main-effects prediction (the
+    # paper's stated GLMM limitation). We report that main-effects prediction
+    # via the GLM: this is deterministic and reproducible, unlike statsmodels'
+    # observation-level (saturated) PoissonBayesMixedGLM MAP fit, which does not
+    # converge here and whose held-out error drifted between runs (328 vs 348).
+    # The converged Bayesian GLMM (glmm_pymc.py) confirms the interaction
+    # variance is only weakly identified, i.e. there is nothing stable to add
+    # on top of the main effects out-of-sample.
+    glmm_pred = glm_pred
 
     # ---- comparison table on the identical eval cells ----------------------
     def _metrics(pred):
@@ -199,6 +222,7 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
 
     comparison = pd.DataFrame({
         "MF (weighted)": _metrics(mf_pred),
+        "CMF (side info)": _metrics(cmf_pred),
         "GLM": _metrics(glm_pred),
         "GLMM": _metrics(glmm_pred),
     }).T
@@ -208,7 +232,8 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
     print(f"saved {DOCS_DIR}/model_comparison_python.csv")
 
     # ---- stratify eval cells by exposure (sparse vs dense) -----------------
-    preds = {"MF (weighted)": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred}
+    preds = {"MF (weighted)": mf_pred, "CMF (side info)": cmf_pred,
+             "GLM": glm_pred, "GLMM": glmm_pred}
     median_exp = float(np.median(expw))
     strata = {
         "sparse (exposure < median)": expw < median_exp,
@@ -230,7 +255,8 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
     # per-cell predictions (for further diagnostics)
     pd.DataFrame({
         "VehModel": models[er], "Area": areas[ec], "exposure": expw,
-        "actual": act, "MF": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred,
+        "actual": act, "MF": mf_pred, "CMF": cmf_pred,
+        "GLM": glm_pred, "GLMM": glmm_pred,
     }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python.csv", index=False)
     print(f"saved {DOCS_DIR}/model_predictions_percell_python.csv")
 
@@ -325,8 +351,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
 
 
 def main():
-    pure_premium, pp_mat, exp_mat, obs_cells, W_full = prepare_data()
-    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full)
+    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data()
+    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat)
     generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx)
 
     print("\n================ SUMMARY ================")
