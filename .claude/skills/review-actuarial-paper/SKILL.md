@@ -11,7 +11,7 @@ Review as **both** an actuary (pricing soundness, exposure/credibility, regulato
 
 **Core principle: every claim must be traced to evidence.** The paper's prose says the method wins; the figures, the math, and the code in this repo say whether it actually does. When they disagree, the code wins. Do not accept a superiority claim that has no quantitative comparison behind it.
 
-**This repo's paper:** `paper/ICA2026_Matrix_Factorization_for_Class_Ratemaking.md` (source) and the `.pdf` (rendered equations — read the PDF when the markdown math looks mangled). Method code: `src/brazil_data_analysis_R.R`, `src/brazil_data_analysis_python.py`, `src/cmf.R`, `cmf.r`. Data: `data/`.
+**This repo's paper:** `paper/ICA2026_Matrix_Factorization_for_Class_Ratemaking.md` (source) and the `.pdf` (rendered equations — read the PDF when the markdown math looks mangled). Method code (live pipeline): `src/ratemaking.py`, `src/brazil_data_analysis_R.py`, `src/glmm_pymc.py`, `src/sensitivity_exposure.py`. The original R scripts and pre-refactor Python experiment are archived under `archive/` (reference only). Data: `data/`.
 
 ## When to Use
 

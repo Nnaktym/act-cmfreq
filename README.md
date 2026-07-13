@@ -16,17 +16,19 @@ missing and imputed).
 ```text
 paper/          ICA2026 paper (Markdown source + figures fig_4_2_1 .. fig_4_5_2 + PDF)
 data/           brvehins_org.csv (Honda raw export), all_data.csv, population density
-src/
+src/            the live analysis pipeline (Python only)
   ratemaking.py               shared library: data load/aggregation, split/CV,
                               metrics, visualisation (ported from cmf.R)
   brazil_data_analysis_R.py   MAIN analysis (Python): MF vs GLM vs GLMM comparison
                               + regenerates the paper's MF/GLM figures
   glmm_pymc.py                fully-converged Bayesian Poisson GLMM (pymc) +
                               GLMM figures (fig_4_4_1/2) + per-cell uncertainty
-  brazil_data_analysis_R.R    original R analysis (reference)
-  brazil_data_analysis_R.ipynb  original R notebook (reference)
-  cmf.R                       original R helpers (reference)
-  brazil_data_analysis_python.py  earlier side-info CMF experiment (reference)
+  sensitivity_exposure.py     exposure-threshold sensitivity analysis
+archive/        code no longer used in the analysis, kept for reference:
+                original R scripts (cmf.R, brazil_data_analysis_R.R/.ipynb,
+                export_brvehins_full.R), root R prototype (cmf.r), and the
+                pre-refactor Python CMF experiment (brazil_data_analysis_python.py).
+                See archive/README.md.
 docs/           analysis outputs (comparison tables, per-cell predictions, this
                 doc set) — see also notebook_paper_correspondence_check.md (historical)
 ```
