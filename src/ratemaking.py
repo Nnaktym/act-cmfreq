@@ -70,14 +70,18 @@ def get_total(data, category_to_analyze, aggregate_col, threshold=None):
 
 def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
                      target="pure_premium", cell_exposure_min=100,
-                     model_exposure_min=10):
-    """Build the vehicle-model x region rate and exposure matrices.
+                     model_exposure_min=10, row_col="VehModel", col_col="Area"):
+    """Build the vehicle x region rate and exposure matrices.
 
     Reproduces the R preprocessing (Sections 2-3): optionally filter to one
     brand (`brand=None` keeps every manufacturer), aggregate the COLLISION
-    claim numerator and exposure to a model x region matrix, keep only cells
+    claim numerator and exposure to a `row_col` x region matrix, keep only cells
     with exposure >= `cell_exposure_min` (others become NaN = missing) and
-    models whose total exposure exceeds `model_exposure_min`.
+    rows whose total exposure exceeds `model_exposure_min`.
+
+    `row_col` chooses the row granularity: "VehModel" (~4200 trim-level models,
+    the default / canonical analysis) or "VehGroup" (~436 model families, a
+    coarser, much denser matrix).
 
     The numerator is restricted to collision claims (部分衝突 + 全損衝突):
       * target="pure_premium": numerator = sum(COLLISION_AMOUNT)  (claim amount)
@@ -103,7 +107,7 @@ def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
     brv = brv.copy()
     brv["Numerator"] = brv[num_cols].sum(axis=1)
 
-    cats = ["VehModel", "Area"]
+    cats = [row_col, col_col]
     exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
     numerator_total = get_total(brv, cats, "Numerator")
 
@@ -238,34 +242,42 @@ def build_side_info(pure_premium, csv_path="data/brvehins1_full.csv",
                     density_path="data/brazil_population_density.csv"):
     """Build row/column side-information matrices for Collective MF (CMF).
 
-    Row side info: one-hot of the vehicle model's VehGroup (e.g. "Honda Civic",
-    "Honda Cr-v") — an observable grouping that grounds the latent row factors
-    and supplies an attribute basis for sparse/cold-start models. Column side
-    info: the area's population density (IBGE Censo 2022), log-scaled and
-    standardized to mean 0 / sd 1 across areas. Density spans ~2.5–493 hab/km²,
-    so log first; feeding the continuous value (rather than a thresholded
-    urban/rural dummy) uses the actual figures and avoids an arbitrary cutoff.
+    For the VehGroup x State configuration:
 
-    Both matrices are aligned to `pure_premium`'s index (vehicle models) and
-    columns (areas). Returns (U, I, u_labels, i_labels) with U, I as float
-    numpy arrays of shape (n_models, p_u) and (n_areas, p_i).
+    * Row side info (U): the manufacturer / COMPANY of each vehicle-group row,
+      taken as the first token of the VehGroup label (e.g. "Gm Chevrolet Kadett"
+      -> "Gm", "Honda Motos Ate 450cc" -> "Honda"), one-hot encoded. It groups
+      the ~200 vehicle groups into their maker so sparse/cold rows can borrow
+      strength from same-company groups.
+    * Column side info (I): the population-density CLASS of each State (IBGE
+      Censo 2022), tertiled across the 27 states into low / medium / high and
+      one-hot encoded. Density spans ~2.5-493 hab/km²; a three-level class is a
+      robust urban/rural proxy that avoids committing to a single cut point.
+
+    U is aligned to `pure_premium`'s index (vehicle groups), I to its columns
+    (States). Returns (U, I, u_labels, i_labels) with U, I as float numpy arrays
+    of shape (n_groups, p_u) and (n_states, p_i).
+
+    `csv_path` is accepted for signature stability but no longer read (the
+    company is derived from the row label itself).
     """
-    models = pure_premium.index
-    areas = pure_premium.columns
+    groups = pure_premium.index
+    states = pure_premium.columns
 
-    raw = load_bravehins(csv_path)
-    vg = (raw[["VehModel", "VehGroup"]].drop_duplicates()
-          .set_index("VehModel")["VehGroup"].reindex(models))
-    U = pd.get_dummies(vg, dummy_na=True).astype(float)
+    # ---- row side info: manufacturer / company one-hot ----------------------
+    company = groups.to_series().str.split().str[0]
+    U = pd.get_dummies(company).astype(float)
 
+    # ---- column side info: State population-density class (tertiles) --------
     dens = pd.read_csv(density_path)
-    d = (dens.drop_duplicates("Area").set_index("Area")["density_km2"]
-         .reindex(areas).astype(float))
-    logd = np.log(d)
-    # standardize over observed areas; any unmatched area -> 0 (population mean)
-    z = (logd - logd.mean()) / logd.std(ddof=0)
-    z = z.fillna(0.0)
-    I = pd.DataFrame({"log_pop_density_z": z.to_numpy()}, index=areas)
+    # each State's IBGE density: single-state rows carry the state-level value
+    state_density = (dens[dens["note"] == "single-state"]
+                     .drop_duplicates("parent_state")
+                     .set_index("parent_state")["density_km2"])
+    d = state_density.reindex(states).astype(float)
+    dclass = pd.qcut(d, q=3, labels=["dens_low", "dens_med", "dens_high"])
+    # unmatched state (if any) -> all-zero class row (get_dummies drops NaN)
+    I = pd.get_dummies(dclass).astype(float).reindex(states, fill_value=0.0)
 
     return (U.to_numpy(dtype=float), I.to_numpy(dtype=float),
             list(U.columns), list(I.columns))

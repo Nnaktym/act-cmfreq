@@ -6,16 +6,21 @@ paper *Matrix Factorization for Modeling High-Dimensional Interactions in Class
 Ratemaking* (Kato, Fujita, Nomura).
 
 The analysis is now maintained in **Python** (the R scripts are kept for
-reference). Data: `brvehins1` (Brazilian auto insurance) from CASdatasets,
-filtered to Honda, aggregated to a 48 vehicle-model × 40 region matrix of pure
-premiums (468 observed cells with exposure ≥ 100; the rest are treated as
-missing and imputed).
+reference). Data: `brvehins1` (Brazilian auto insurance) from CASdatasets, all
+manufacturers, aggregated to a **231 vehicle-group × 27 State** matrix of
+collision pure premium (2,233 observed cells with exposure ≥ 100; the rest are
+treated as missing and imputed). Rows are vehicle groups (`VehGroup`, model
+families), columns are the 27 Brazilian States; this coarser, denser matrix is
+the configuration adopted after the granularity study in
+`docs/vehgroup_state_experiment.md`. Target is pure premium (collision claim
+amount / exposure).
 
 ## Repository layout
 
 ```text
 paper/          ICA2026 paper (Markdown source + figures fig_4_2_1 .. fig_4_5_2 + PDF)
-data/           brvehins_org.csv (Honda raw export), all_data.csv, population density
+data/           brvehins1_full.csv (all-manufacturer raw export, analysis input),
+                brvehins_org.csv (legacy Honda export), population density
 src/            the live analysis pipeline (Python only)
   ratemaking.py               shared library: data load/aggregation, split/CV,
                               metrics, visualisation (ported from cmf.R)

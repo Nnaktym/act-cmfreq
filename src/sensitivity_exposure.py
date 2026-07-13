@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from brazil_data_analysis_R import prepare_data, run_comparison
 
 THRESHOLDS = [50, 100, 200]
-TARGETS = ["pure_premium", "frequency"]
+TARGETS = ["pure_premium"]  # frequency dropped: analysis is pure-premium only now
 
 
 def main():

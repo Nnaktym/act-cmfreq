@@ -68,15 +68,15 @@ W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25  # legacy fixed weights (now CV-tuned)
 # U/I attributes progressively less/more), searched with a compact k grid.
 WEIGHT_GRID = [(1.0, 0.05, 0.05), (1.0, 0.15, 0.15),
                (1.0, 0.25, 0.25), (1.0, 0.5, 0.5)]
-CMF_WEIGHT_K_GRID = range(2, 41, 3)
+CMF_WEIGHT_K_GRID = range(2, 28, 3)
 
 FIG_DIR = "figs/python_port"
 PAPER_DIR = "paper"
 DOCS_DIR = "docs"
-# Latent-factor grid. The rank is bounded by the smaller matrix dimension (40
-# regions): for k > 40 the item factor matrix (40 x k) is over-parameterized and
-# adds no representational capacity, so the search tops out at 40.
-K_GRID = range(2, 41)
+# Latent-factor grid. The rank is bounded by the smaller matrix dimension (27
+# States): for k > 27 the item factor matrix (27 x k) is over-parameterized and
+# adds no representational capacity, so the search tops out at 27.
+K_GRID = range(2, 28)
 LAMBDA_GRID = [0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000]
 
 
@@ -113,9 +113,15 @@ def prepare_data(target="pure_premium", cell_exposure_min=100):
     `cell_exposure_min` is the exposure floor below which a cell is treated as
     missing (default 100; varied only for the sensitivity analysis).
     """
+    # Row axis = VehGroup (~200 model families), column axis = State (27 federal
+    # units). This coarser, much denser matrix is the configuration adopted for
+    # the analysis (see docs/vehgroup_state_experiment.md). NOTE: for minimal
+    # churn the downstream code keeps the pandas keys "VehModel"/"Area", but with
+    # this configuration those keys carry vehicle GROUPS and STATES respectively.
     pure_premium, exposure_total = load_cell_matrix(
         csv_path="data/brvehins1_full.csv", brand=None, target=target,
-        cell_exposure_min=cell_exposure_min)
+        cell_exposure_min=cell_exposure_min,
+        row_col="VehGroup", col_col="State")
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
@@ -126,12 +132,12 @@ def prepare_data(target="pure_premium", cell_exposure_min=100):
     mean_exp = float(exp_mat[obs_cells].mean())
     W_full = np.nan_to_num(exp_mat, nan=0.0) / mean_exp
 
-    # Side information for the CMF variant: row = VehGroup (e.g. "Honda Civic"),
-    # column = urban/rural population-density class.
+    # Side information for the CMF variant: row = manufacturer/company one-hot
+    # (e.g. "Honda", "Gm"), column = State population-density class (low/med/high).
     U_mat, I_mat, u_labels, i_labels = build_side_info(pure_premium)
     print(f"pure_premium matrix: {pp_mat.shape}, observed cells: {obs_cells.sum()}")
-    print(f"side info: U {U_mat.shape} ({len(u_labels)} vehicle groups), "
-          f"I {I_mat.shape} ({len(i_labels)} density feature)")
+    print(f"side info: U {U_mat.shape} ({len(u_labels)} companies), "
+          f"I {I_mat.shape} ({len(i_labels)} density classes)")
     return pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat
 
 
@@ -332,9 +338,9 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
 
-    # The model is fit on ALL manufacturers, but the full matrix (~1000 rows) is
-    # unreadable as a heatmap, so heatmaps are restricted to the Honda models
-    # (the paper's running example). Scatters stay on the full eval set.
+    # The model is fit on ALL manufacturers, but the full matrix (~200 groups) is
+    # unreadable as a heatmap, so heatmaps are restricted to the Honda vehicle
+    # groups (the paper's running example). Scatters stay on the full eval set.
     honda = pure_premium.index.to_series().str.contains("Honda", na=False).to_numpy()
     def _honda(df):
         return df.loc[df.index[honda]]
@@ -344,20 +350,20 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
     # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(_honda(pure_premium), "actual (Honda)", max_limit=hmax,
+    visualize_heatmap(_honda(pure_premium), "actual (Honda groups)", max_limit=hmax,
                       fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
-    visualize_heatmap(_honda(_to_df(estimated_mf)), "pred: MF (weighted, Honda)",
+    visualize_heatmap(_honda(_to_df(estimated_mf)), "pred: MF (weighted, Honda groups)",
                       max_limit=hmax, fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
 
     visualize_heatmap(_honda(pure_premium),
-                      "Actual Claim Costs by Vehicle Model and Region (Honda)",
+                      "Actual Claim Costs by Vehicle Group and State (Honda)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_2_1{sfx}.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
                            fig_path=f"{PAPER_DIR}/fig_4_5_1{sfx}.png")
     visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
                            max_lim=smax, fig_path=f"{PAPER_DIR}/fig_4_6_1{sfx}.png")
     visualize_heatmap(_honda(_to_df(estimated_mf)),
-                      "Estimated Pure Premium Rates (Matrix Factorization, Honda)",
+                      "Estimated Pure Premium Rates (Matrix Factorization, Honda groups)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_5_2{sfx}.png")
 
     # ---- full-data GLM ------------------------------------------------------
@@ -374,7 +380,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
     visualize_heatmap(_honda(_to_df(g_obs)),
-                      "Estimated Pure Premium Rates -- GLM (Honda; white = missing)",
+                      "Estimated Pure Premium Rates -- GLM (Honda groups; white = missing)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_2{sfx}.png")
 
     # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
@@ -396,7 +402,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
               / all_long.loc[predictable, "exposure"]).to_numpy()
         glm_all_flat[predictable] = pr
     visualize_heatmap(_honda(_to_df(glm_all_flat.reshape(len(models), len(areas)))),
-                      "Predicted Pure Premium Rates -- Main-Effects GLM (Honda, all cells)",
+                      "Predicted Pure Premium Rates -- Main-Effects GLM (Honda groups, all cells)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced

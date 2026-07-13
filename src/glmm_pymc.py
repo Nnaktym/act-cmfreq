@@ -42,7 +42,11 @@ from ratemaking import load_cell_matrix, visualize_heatmap
 def main(target="pure_premium"):
     os.makedirs("docs", exist_ok=True)
     sfx = "" if target == "pure_premium" else "_freq"
-    pure_premium, exposure_total = load_cell_matrix(target=target)
+    # Same VehGroup x State configuration as the main analysis
+    # (brazil_data_analysis_R.py). The pandas index carries vehicle GROUPS and the
+    # columns carry STATES.
+    pure_premium, exposure_total = load_cell_matrix(
+        target=target, row_col="VehGroup", col_col="State")
     pp = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
     models = pure_premium.index.to_numpy()
@@ -53,7 +57,7 @@ def main(target="pure_premium"):
     log_exp = np.log(exp_mat[r, c])
     n_obs = len(r)
     n_m, n_a = len(models), len(areas)
-    print(f"observed cells: {n_obs}  ({n_m} models x {n_a} areas)")
+    print(f"observed cells: {n_obs}  ({n_m} vehicle groups x {n_a} states)")
 
     with pm.Model():
         b0 = pm.Normal("b0", 0.0, 5.0)
@@ -102,6 +106,10 @@ def main(target="pure_premium"):
     grid = np.full(pp.shape, np.nan)
     grid[r, c] = rate_mean
     grid_df = pd.DataFrame(grid, index=pure_premium.index, columns=pure_premium.columns)
+    # restrict to Honda vehicle groups so the GLMM heatmaps match the other paper
+    # figures (fig_4_2_1 etc.), which use Honda groups as the running example
+    honda = grid_df.index.to_series().str.contains("Honda", na=False).to_numpy()
+    grid_df = grid_df.loc[grid_df.index[honda]]
     hmax = float(np.nanpercentile(rate_mean, 99)) or 1.0
     visualize_heatmap(grid_df, "Estimated Pure Premium Rates -- GLMM (pymc, observed cells)",
                       max_limit=hmax, fig_path=f"paper/fig_4_4_1{sfx}.png")
