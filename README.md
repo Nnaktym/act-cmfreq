@@ -6,27 +6,34 @@ paper *Matrix Factorization for Modeling High-Dimensional Interactions in Class
 Ratemaking* (Kato, Fujita, Nomura).
 
 The analysis is now maintained in **Python** (the R scripts are kept for
-reference). Data: `brvehins1` (Brazilian auto insurance) from CASdatasets,
-filtered to Honda, aggregated to a 48 vehicle-model × 40 region matrix of pure
-premiums (468 observed cells with exposure ≥ 100; the rest are treated as
-missing and imputed).
+reference). Data: `brvehins1` (Brazilian auto insurance) from CASdatasets, all
+manufacturers, aggregated to a **231 vehicle-group × 27 State** matrix of
+collision pure premium (2,233 observed cells with exposure ≥ 100; the rest are
+treated as missing and imputed). Rows are vehicle groups (`VehGroup`, model
+families), columns are the 27 Brazilian States; this coarser, denser matrix is
+the configuration adopted after the granularity study in
+`docs/vehgroup_state_experiment.md`. Target is pure premium (collision claim
+amount / exposure).
 
 ## Repository layout
 
 ```text
 paper/          ICA2026 paper (Markdown source + figures fig_4_2_1 .. fig_4_5_2 + PDF)
-data/           brvehins_org.csv (Honda raw export), all_data.csv, population density
-src/
+data/           brvehins1_full.csv (all-manufacturer raw export, analysis input),
+                brvehins_org.csv (legacy Honda export), population density
+src/            the live analysis pipeline (Python only)
   ratemaking.py               shared library: data load/aggregation, split/CV,
                               metrics, visualisation (ported from cmf.R)
   brazil_data_analysis_R.py   MAIN analysis (Python): MF vs GLM vs GLMM comparison
                               + regenerates the paper's MF/GLM figures
   glmm_pymc.py                fully-converged Bayesian Poisson GLMM (pymc) +
                               GLMM figures (fig_4_4_1/2) + per-cell uncertainty
-  brazil_data_analysis_R.R    original R analysis (reference)
-  brazil_data_analysis_R.ipynb  original R notebook (reference)
-  cmf.R                       original R helpers (reference)
-  brazil_data_analysis_python.py  earlier side-info CMF experiment (reference)
+  sensitivity_exposure.py     exposure-threshold sensitivity analysis
+archive/        code no longer used in the analysis, kept for reference:
+                original R scripts (cmf.R, brazil_data_analysis_R.R/.ipynb,
+                export_brvehins_full.R), root R prototype (cmf.r), and the
+                pre-refactor Python CMF experiment (brazil_data_analysis_python.py).
+                See archive/README.md.
 docs/           analysis outputs (comparison tables, per-cell predictions, this
                 doc set) — see also notebook_paper_correspondence_check.md (historical)
 ```
@@ -63,7 +70,13 @@ numbers won't match the R scripts to the decimal.
   held-out set of observed cells, with RMSE, exposure-weighted RMSE, and Poisson
   deviance side by side.
 - **No leakage.** The test set is held out *before* the CV grid search over
-  (k, λ). Tuning is exposure-weighted to match the final fit.
+  (k, λ). Tuning is exposure-weighted **and non-centered (`center=False`) to match
+  the final fit exactly** — otherwise the tuned λ would be calibrated for a
+  different (mean-centered) model than the one deployed.
+- **R scripts are historical/unweighted.** `cmf.R` / `brazil_data_analysis_R.R`
+  fit the MF *without* exposure weighting (no `W=`); the exposure-weighted
+  comparison the paper reports is the **Python** pipeline only. Treat the R files
+  as the earlier, unweighted reference implementation.
 - **GLMM.** `glmm_pymc.py` fits `Y_ij ~ Poisson(E_ij·exp(b0+α_i+τ_j+z_ij))`,
   `z_ij ~ N(0, σ²)` with pymc (non-centered, sum-to-zero main effects). The
   interaction variance σ is only weakly identified — one observation per
@@ -79,12 +92,20 @@ On the identical held-out cells, with exposure weighting applied consistently:
 | Model | RMSE | Exposure-weighted RMSE | Poisson deviance |
 |---|---:|---:|---:|
 | GLM (main effects) | 328.2 | 271.0 | 4.74×10⁶ |
-| GLMM (random interaction) | 347.6 | 294.9 | 5.93×10⁶ |
-| Matrix Factorization | 393.2 | 331.2 | 7.79×10⁶ |
+| GLMM (random interaction) | 328.2 | 271.0 | 4.74×10⁶ |
+| Matrix Factorization | 354.4 | 426.6 | 1.14×10⁷ |
+
+Selected hyperparameters: `k=3`, `λ=100` (strong regularization; the CV surface is
+nearly flat in `k`). The GLMM ties the GLM because every held-out cell is an
+unobserved interaction, so its random effect reverts to zero (this is the paper's
+GLMM limitation, shown numerically). Stratifying by exposure, MF is near-parity
+with the GLM in the **sparse** stratum (wRMSE 316.4 vs 310.3) but well behind on
+**dense** cells (441.5 vs 264.2).
 
 The main-effects GLM is most accurate on **observed** cells; MF is *competitive
-with*, not uniformly superior to, the conventional models there. Matrix
-factorization's distinctive value is **structural** — it produces
-interaction-aware estimates for the sparse and missing cells that the GLMM cannot
-resolve (it reverts to main effects) — rather than a uniform accuracy gain. See
-the paper's Section 4.6 and Conclusion for the full discussion.
+with*, not uniformly superior to, the conventional models there — and most
+competitive where exposure is thin. Matrix factorization's distinctive value is
+**structural** — it produces interaction-aware estimates for the sparse and
+missing cells that the GLMM cannot resolve (it reverts to main effects) — rather
+than a uniform accuracy gain. See the paper's Section 4.6 and Conclusion for the
+full discussion.

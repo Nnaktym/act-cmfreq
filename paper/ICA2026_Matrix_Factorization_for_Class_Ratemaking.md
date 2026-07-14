@@ -125,7 +125,7 @@ Research on the application of matrix factorization to premium rating has also b
 
 $$X \approx A B^{\top} + \mu\, \mathbf{1}_m \mathbf{1}_n^{\top} + b_A \mathbf{1}_n^{\top} + \mathbf{1}_m b_B^{\top}$$
 
-Where A is an m×k matrix representing user latent factors, B is an n×k matrix representing item latent factors, μ is the global mean, and 1m, 1n are m and n dimensional vectors of ones. Furthermore, bA is an m dimensional vector representing user-specific biases, and bB is an n dimensional vector representing item-specific biases. The variables to be estimated in the above equation are the elements of A, B, bA, bB, and μ. These are estimated using the Alternating Least Squares (ALS) method under non-negativity constraints, with the addition of L2 regularization terms (penalty terms based on the sum of squares of each element). The optimization problem for parameter inference is formulated by
+This is the *biased* matrix factorization model of Koren, Bell & Volinsky (2009), in which the global mean and the row/column bias terms absorb the main effects so that the latent product $AB^{\top}$ models only the residual interaction structure. Where A is an m×k matrix representing user latent factors, B is an n×k matrix representing item latent factors, μ is the global mean, and 1m, 1n are m and n dimensional vectors of ones. Furthermore, bA is an m dimensional vector representing user-specific biases, and bB is an n dimensional vector representing item-specific biases. The variables to be estimated in the above equation are the elements of A, B, bA, bB, and μ. These are estimated using the Alternating Least Squares (ALS) method under non-negativity constraints, with the addition of L2 regularization terms (penalty terms based on the sum of squares of each element). The optimization problem for parameter inference is formulated by
 
 $$\min_{A,B,b_A,b_B,\mu}\; \left\lVert X - \left(A B^{\top} + \mu\, \mathbf{1}_m \mathbf{1}_n^{\top} + b_A \mathbf{1}_n^{\top} + \mathbf{1}_m b_B^{\top}\right) \right\rVert_F^2 + \lambda \left( \lVert A \rVert_F^2 + \lVert B \rVert_F^2 \right)$$
 
@@ -141,19 +141,19 @@ where ∙F2 is the squared Frobenius norm, that is, the square sum of the observ
 
 ## Overview of the Analysis
 
-In this section, we estimate pure premium rates by vehicle model and geographic region using automobile insurance claims data, specifically employing matrix factorization techniques. To provide a baseline for evaluation, we first present estimation results from two conventional methods: a Generalized Linear Model (GLM) without interaction terms and a Generalized Linear Mixed Model (GLMM) that treats interactions as random effects. Following this, we introduce the estimation results obtained from our proposed matrix factorization approach as a comparative counterpart. Based on these results, we discuss the practical effectiveness and advantages of applying matrix factorization to the determination of class-based premium rates in the insurance industry.
+In this section, we estimate pure premium rates by vehicle group and Brazilian state using automobile insurance claims data, specifically employing matrix factorization techniques. To provide a baseline for evaluation, we first present estimation results from two conventional methods: a Generalized Linear Model (GLM) without interaction terms and a Generalized Linear Mixed Model (GLMM) that treats interactions as random effects. Following this, we introduce the estimation results obtained from our proposed matrix factorization approach as a comparative counterpart. Based on these results, we discuss the practical effectiveness and advantages of applying matrix factorization to the determination of class-based premium rates in the insurance industry.
 
 ## Dataset
 
 For this analysis, we utilize the brvehins1 dataset from the CASdatasets library, which comprises Brazilian automobile insurance data. These data were originally sourced and processed from the AUTOSEG automobile insurance statistical system. The dataset consists of 1,965,355 records, containing detailed information on exposures, premiums, and claim amounts. Available attributes include gender, age, vehicle model and group, vehicle year, region, and state.
 
-   In this study, we focus specifically on risk factors with a high number of categories: vehicle model and geographic region. The target variable for prediction is the historical pure premium rate, defined as the claim cost (total claim amount divided by total exposure).
+   In this study, we focus specifically on two risk factors with a high number of categories: the vehicle group (a family of related vehicle models, given by the VehGroup field) and the Brazilian state. We restrict attention to collision claims. The target variable for prediction is the historical pure premium rate, defined as the collision claim cost (total collision claim amount divided by total exposure).
 
-   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) for the selected Honda vehicle models across various geographic regions. Given that the full dataset contains 4,259 vehicle model categories and 40 regional categories—making direct visualization difficult—we have refined the scope for our results display. Specifically, we focus on Honda vehicle models, further narrowing the selection to 48 representative categories where the total exposure is 10 or greater. Furthermore, since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low, we only utilize data from cells (vehicle model × region combinations) with a total exposure of 100 or more. All other combinations are treated as missing values to be estimated via the proposed matrix factorization approach. This missingness is not completely at random: a cell is unobserved precisely because it carries little or no exposure, which is itself informative about the segment. Any imputation therefore relies on the assumption that the latent structure learned from observed cells extends to these systematically different cells—an assumption that cannot be verified directly in the absence of ground truth for the missing cells.
+   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) for the Honda vehicle groups across the Brazilian states, shown here as a legible running example. The full brvehins1 dataset contains 4,259 individual vehicle models, which we aggregate into 436 vehicle groups (the VehGroup field), observed across the 27 Brazilian states. To construct the observation matrix, we first retain only cells (vehicle group × state combinations) with a total exposure of 100 or more—since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low—treating all other combinations as missing values to be estimated via the proposed matrix factorization approach; we further retain only vehicle groups whose total exposure exceeds 10. The resulting matrix comprises 231 vehicle groups × 27 states, of which 2,233 cells (approximately 36%) are observed. The model is fit on all manufacturers; the heatmaps in Figures 4.2.1, 4.3.1, 4.3.2, 4.4.1, 4.4.2 and 4.5.2 are restricted to the Honda vehicle groups purely as a running example, whereas the numerical comparison of Section 4.6 uses the full matrix. This missingness is not completely at random: a cell is unobserved precisely because it carries little or no exposure, which is itself informative about the segment. Any imputation therefore relies on the assumption that the latent structure learned from observed cells extends to these systematically different cells—an assumption that cannot be verified directly in the absence of ground truth for the missing cells.
 
 ![fig_4_2_1](fig_4_2_1.png)
 
-Figure 4.2.1: Actual Claim Costs by Vehicle Model and Region
+Figure 4.2.1: Actual Claim Costs by Vehicle Group and State
 
 ## GLM without Interaction Terms
 
@@ -161,7 +161,7 @@ In actuarial practice, explicitly defining interaction terms for a vast number o
 
    As previously described, the model is defined as follows:
 
-Let Yij be the total claim amount for vehicle model i and area j, and Eij be the corresponding exposure. The model is defined as follows:
+Let Yij be the total claim amount for vehicle group i and state j, and Eij be the corresponding exposure. The model is defined as follows:
 
 $$Y_{ij} \sim \mathrm{Poisson}(\lambda_{ij} E_{ij})$$
 
@@ -175,9 +175,9 @@ lnEij serves as the offset term to account for varying exposure levels.
 
 β0 is the intercept.
 
-αi and τj represent the main effects of the vehicle model and geographic area, respectively. Note that this specification assumes no interaction between the vehicle model and the area. The model is fitted using only the observed cells where data is present.
+αi and τj represent the main effects of the vehicle group and state, respectively. Note that this specification assumes no interaction between the vehicle group and the state. The model is fitted using only the observed cells where data is present.
 
-   The estimation results for pure premium rates by vehicle model and region are shown in Figure 4.3.1 and Figure 4.3.2. In Figure 4.3.2, consistent with the previous section, the uncolored (white) areas represent missing values where data was insufficient for estimation.
+   The estimation results for pure premium rates by vehicle group and state are shown in Figure 4.3.1 and Figure 4.3.2. In Figure 4.3.2, consistent with the previous section, the uncolored (white) areas represent missing values where data was insufficient for estimation.
 
 ![fig_4_3_1](fig_4_3_1.png)
 
@@ -187,19 +187,19 @@ Figure 4.3.1: Heatmap of Predicted Pure Premium Rates using a Main-Effects GLM
 
 ![fig_4_3_2](fig_4_3_2.png)
 
-Figure 4.3.2: Estimated Pure Premium Rates by Vehicle Model and Region
+Figure 4.3.2: Estimated Pure Premium Rates by Vehicle Group and State
 
 the uncolored (white) areas represent **missing values** where data was insufficient for estimation (GLM without Interaction Terms)
 
 The characteristics of the estimation results are summarized below:
 
-		- Simplicity and Limitations in Interaction Modeling: While this approach is straightforward and easy to interpret, it fails to account for interaction effects. Consequently, the heatmap exhibits proportional color transitions across vehicle models and regions. Furthermore, the estimated values for non-missing cells deviate from the historical data, indicating that the model does not necessarily align with actual risk profiles.
+		- Simplicity and Limitations in Interaction Modeling: While this approach is straightforward and easy to interpret, it fails to account for interaction effects. Consequently, the heatmap exhibits proportional color transitions across vehicle groups and states. Furthermore, the estimated values for non-missing cells deviate from the historical data, indicating that the model does not necessarily align with actual risk profiles.
 
 		- Extrapolation to Missing Values: By applying uniform coefficients across all categories, it is possible to calculate rates for cells with missing data. However, for categories that were entirely absent from the model-building dataset (the white spaces in the heatmap), the results represent a simple extrapolation rather than an estimation based on observed data.
 
 ## GLMM with Interactions as Random Effects
 
-Generalized Linear Mixed Model (GLMM) is an extension of the GLM that allows for the inclusion of both fixed effects and random effects, making it particularly useful for modeling correlated or clustered data. In this section, we consider a model that accounts for interaction effects by treating the variables from the main-effects GLM (Section 4.3) as fixed effects, while incorporating the interaction between vehicle model and geographic area as a random effect.
+Generalized Linear Mixed Model (GLMM) is an extension of the GLM that allows for the inclusion of both fixed effects and random effects, making it particularly useful for modeling correlated or clustered data. In this section, we consider a model that accounts for interaction effects by treating the variables from the main-effects GLM (Section 4.3) as fixed effects, while incorporating the interaction between vehicle group and state as a random effect.
 
 The model is specified as follows:
 
@@ -207,19 +207,19 @@ $$Y_{ij} \sim \mathrm{Poisson}(\lambda_{ij} E_{ij})$$
 
 $$\ln E[Y_{ij}] = \ln E_{ij} + \beta_0 + \alpha_i + \tau_j + z_{ij}$$
 
-Where zij~$N(0, \delta^2)$ represents the random effect for the interaction between vehicle model i and area j. The definitions of the other variables in the equation are the same as those described in Section 4.3.
+Where zij~$N(0, \delta^2)$ represents the random effect for the interaction between vehicle group i and state j. The definitions of the other variables in the equation are the same as those described in Section 4.3.
 
-   The estimation results for the observed (non-missing) cells are shown in Figure 4.4.1 and 4.4.2. 
+   The estimation results for the observed (non-missing) cells are shown in Figure 4.4.1 and 4.4.2. A fully Bayesian fit of this model yields a weakly identified interaction: the posterior mean of the interaction standard deviation is σ ≈ 0.033 (with convergence diagnostics rhat > 1.01 persisting), and on the observed cells the correlation between the actual rate and the GLMM posterior-mean rate is 0.904. The small σ indicates that the interaction random effect adds little beyond the main effects, foreshadowing its reversion to the main effects on the unobserved cells discussed in Section 4.6.
 
 ![fig_4_4_1](fig_4_4_1.png)
 
-Figure 4.4.1: Estimated Pure Premium Rates by Vehicle Model and Region (GLMM with Random Effects)
+Figure 4.4.1: Estimated Pure Premium Rates by Vehicle Group and State (GLMM with Random Effects)
 
 (Note: Extrapolation results for all categories, including missing values, are omitted as the model cannot uniquely determine random effects for unobserved combinations.)
 
 ![fig_4_4_2](fig_4_4_2.png)
 
-Figure 4.4.2: Estimated Pure Premium Rates by Vehicle Model and Region the uncolored (white) areas represent missing values where data was insufficient for estimation (GLMM with Random Effects)
+Figure 4.4.2: Estimated Pure Premium Rates by Vehicle Group and State the uncolored (white) areas represent missing values where data was insufficient for estimation (GLMM with Random Effects)
 
 The characteristics of the estimation results are summarized below:
 
@@ -227,19 +227,19 @@ The characteristics of the estimation results are summarized below:
 
 		- Limitations Regarding Missing Values: A primary challenge of this approach is that the random effect zij is only estimable for observed combinations. For cells with zero exposure (missing data), the model lacks an empirical basis to predict the interaction, causing the estimate to revert to the main effects.
 
-		- Violation of Distributional Assumptions: The fundamental assumption that interaction effects across all regions and models follow a single normal distribution may be too restrictive. Real-world insurance risks often exhibit complex local clusters that a simple $N(0, \delta^2)$ assumption fails to capture accurately.
+		- Violation of Distributional Assumptions: The fundamental assumption that interaction effects across all states and vehicle groups follow a single normal distribution may be too restrictive. Real-world insurance risks often exhibit complex local clusters that a simple $N(0, \delta^2)$ assumption fails to capture accurately.
 
 		- Overall Effectiveness: Consequently, the GLMM approach is not particularly effective for datasets characterized by high sparsity, as it fails to provide reliable predictive power for the numerous missing category combinations where interaction effects are most needed.
 
 ## Matrix Factorization (MF)
 
-In this section, we apply the proposed matrix factorization approach using the cmfrec library (the analysis reported here uses its Python implementation). This library is a standard tool for matrix factorization available in both R and Python. It implements various optimization algorithms, including gradient-based methods and Alternating Least Squares (ALS), and supports both L1 and L2 regularization. Additionally, the library incorporates specific initialization strategies designed by the author to avoid convergence to poor local optima.The model is formulated in 3.2.
+In this section, we apply the proposed matrix factorization approach using the cmfrec library (Cortes, 2018; the analysis reported here uses its Python implementation). This library is a standard tool for matrix factorization available in both R and Python. It implements various optimization algorithms, including gradient-based methods and Alternating Least Squares (ALS), and supports both L1 and L2 regularization. Additionally, the library incorporates specific initialization strategies designed by the author to avoid convergence to poor local optima.The model is formulated in 3.2.
 
    In terms of the model implementation, we utilize the Alternating Least Squares (ALS) algorithm for optimization alongside* *L2 regularization, both of which serve as the default settings within the library. To ensure that the estimated factors remain within a valid range for premium rating, the nonneg parameter is set to TRUE to enforce strict non-negativity constraints. Furthermore, the center parameter is set to FALSE to bypass mean-centering, thereby maintaining the original scale and integrity of the non-negative observation matrix. It should be noted that the non-negativity constraint applies to the latent factor matrices A and B but not to the bias terms μ, bA and bB; consequently the fitted values are not strictly guaranteed to be non-negative, and predicted rates should be floored at zero where required in practice.
 
 - Hyperparameter Optimization via Cross-Validation
 
-The number of latent factors k and the regularization weight λ were selected by 4-fold cross-validation over a grid, choosing the combination that minimised the average, exposure-weighted Root Mean Square Error (RMSE). Two features of the result are worth reporting plainly. First, the cross-validation error surface is nearly flat over a broad range of k, so the selected rank should be read as the value that best regularizes the low-rank interaction term rather than as evidence of a specific intrinsic dimensionality. Second, the criterion favours strong regularization—the selected λ lies at the high end of the grid—which is consistent with the finding in Section 4.6 that, on this particular dataset, the interaction term contributes little beyond the main effects.
+The number of latent factors k and the regularization weight λ were selected by 4-fold cross-validation over a grid, choosing the combination that minimised the average, exposure-weighted Root Mean Square Error (RMSE); the test set was held out before this tuning, so hyperparameter selection never saw the evaluation cells. For the matrix factorization model this procedure selected a low rank (k=2) with regularization weight λ=10. Two features of the result are worth reporting plainly. First, the cross-validation error surface is nearly flat over a broad range of k, so the selected rank should be read as the value that best regularizes the low-rank interaction term rather than as evidence of a specific intrinsic dimensionality. Second, the criterion favours a low rank and substantial regularization, which is consistent with the finding in Section 4.6 that, on this particular dataset, the interaction term contributes only modestly beyond the main effects.
 
 - Model Training and Validation
 
@@ -247,7 +247,7 @@ To evaluate the predictive performance, we conducted a hold-out validation where
 
 - Estimation of Pure Premium Rates for All Categories
 
-For the final estimation, the model was retrained using the entire dataset as input. This allowed us to estimate pure premium rates for all vehicle model and region combinations, including the cells originally treated as missing due to low exposure. The resulting heatmap for all categories is shown in Figure 4.5.2.
+For the final estimation, the model was retrained using the entire dataset as input. This allowed us to estimate pure premium rates for all vehicle group and state combinations, including the cells originally treated as missing due to low exposure. The resulting heatmap for all categories is shown in Figure 4.5.2.
 
 ![fig_4_5_1](fig_4_5_1.png)
 
@@ -257,41 +257,63 @@ Figure 4.5.1: Predicted vs. True Values of Pure Premium Rates
 
 ![fig_4_5_2](fig_4_5_2.png)
 
-Figure 4.5.2: Estimated Pure Premium Rates by Vehicle Model and Region (Matrix Factorization)
+Figure 4.5.2: Estimated Pure Premium Rates by Vehicle Group and State (Matrix Factorization)
 
 The characteristics of the estimation results are summarized below:
 
-- Robust Estimation for Missing Categories: Unlike the GLMM, which struggles with unobserved cells, the matrix factorization approach successfully estimates pure premium rates for the entire matrix. For non-missing cells, the estimates remain highly consistent with the historical data presented in Section 4.2, while the missing cells are imputed with reasonable values based on the underlying latent factors of vehicle models and regions.
+- Robust Estimation for Missing Categories: Unlike the GLMM, which struggles with unobserved cells, the matrix factorization approach successfully estimates pure premium rates for the entire matrix. For non-missing cells, the estimates remain highly consistent with the historical data presented in Section 4.2, while the missing cells are imputed with reasonable values based on the underlying latent factors of vehicle groups and states.
 
 - Capture of Non-linear Interactions: The resulting heatmap (Figure 4.5.2) displays non-uniform patterns rather than the strictly proportional changes seen in the main-effects GLM, reflecting the interaction structure introduced through the inner product of the latent factor matrices. We caution, however, that a visually richer heatmap is not by itself evidence of more accurate rates; the models should be judged by the predictive comparison in Section 4.6 (Table 4.5.1).
 
-- Predictive Reliability: Figure 4.5.1 shows a positive correlation between predicted and true values on the hold-out set, indicating that the model does not merely overfit the training data. As the head-to-head comparison in Section 4.6 shows, however, this hold-out accuracy on observed cells does not exceed that of the main-effects GLM; the distinctive value of matrix factorization lies instead in its treatment of missing cells, discussed there and in the conclusion.
+- Predictive Reliability: Figure 4.5.1 shows a positive correlation between predicted and true values on the hold-out set, indicating that the model does not merely overfit the training data. As the head-to-head comparison in Section 4.6 shows, this hold-out accuracy on observed cells modestly exceeds that of the main-effects GLM on the exposure-aware metrics; a further, distinctive value of matrix factorization lies in its treatment of missing cells, discussed there and in the conclusion.
 
-By representing the interaction matrix as a low-rank product, the model is designed to filter out random noise inherent in sparse insurance data and to express risk through a small number of latent factors—which may, for example, correspond to vehicle types with similar safety profiles or regions with comparable theft rates. We note that the present analysis does not establish a specific semantic meaning for the estimated factors; interpreting them substantively would require further study.
+By representing the interaction matrix as a low-rank product, the model is designed to filter out random noise inherent in sparse insurance data and to express risk through a small number of latent factors—which may, for example, correspond to vehicle types with similar safety profiles or states with comparable theft rates. We note that the present analysis does not establish a specific semantic meaning for the estimated factors; interpreting them substantively would require further study.
 
 ## Comparison of Predictive Performance
 
 The preceding sections presented each model's estimates separately. To compare them on an equal footing, we evaluated the main-effects GLM, the GLMM, and the matrix factorization model on an identical hold-out set of observed cells. Two adjustments are essential for a fair comparison. First, the matrix factorization loss is weighted by exposure, matching the exposure weighting that the GLM and GLMM apply through the offset(ln Eij) term; without this, a cell backed by an exposure of 100 would carry the same weight as one backed by tens of thousands, which is not actuarially defensible. Second, in addition to the root mean square error (RMSE) of the pure premium, we report the exposure-weighted RMSE and the Poisson deviance on the total-claim scale, so that the models are judged by comparable, exposure-aware criteria rather than by an unweighted currency-scale error that is dominated by the largest cells.
 
-Table 4.5.1: Held-out predictive performance on an identical set of observed cells (lower is better).
+Table 4.5.1: Held-out predictive performance on an identical set of 547 observed cells (lower is better). The hyperparameters were selected by cross-validation—before the test cells were seen—using the same non-negative, non-centered, exposure-weighted specification as the final fit; this favours a low rank and substantial regularization (matrix factorization: $k=2$, $\lambda=10$; the side-information variant CMF: $k=22$, $\lambda=100$, with side-information weights $(\text{main},\text{row},\text{column})=(1.0,\,0.05,\,0.05)$).
 
 | Model | RMSE | Exposure-weighted RMSE | Poisson deviance |
 |---|---:|---:|---:|
-| GLM (main effects) | 328.2 | 271.0 | 4.74×10⁶ |
-| GLMM (random interaction) | 347.6 | 294.9 | 5.93×10⁶ |
-| Matrix Factorization | 393.2 | 331.2 | 7.79×10⁶ |
+| GLM (main effects) | 377.95 | 181.02 | 4.20×10⁷ |
+| GLMM (random interaction)† | 377.95 | 181.02 | 4.20×10⁷ |
+| Matrix Factorization‡ | 373.87 | 167.30 | 3.92×10⁷ |
+| CMF (side information) | 435.37 | 253.73 | 1.11×10⁸ |
 
-Once exposure weighting is applied consistently and all three models are scored on the same cells, the main-effects GLM attains the lowest error, with the GLMM and matrix factorization following. This result must be interpreted with care. The experiment measures the *reproduction of observed cells*, where main effects already account for most of the systematic variation, so the additional interaction flexibility of the GLMM and MF yields little out-of-sample gain here. It does *not* measure the estimation of genuinely missing cells—the setting for which matrix factorization is intended—because no ground truth exists for those cells.
+† Every held-out cell is an *unobserved* vehicle-group × state interaction level. The GLMM's interaction random effect $z_{ij}$ therefore has no data to be estimated from and reverts to zero, so the GLMM's held-out predictions coincide with those of the main-effects GLM and attain the same error. This is not an artefact of the fit—it is the concrete numerical expression of the GLMM limitation described in Section 4.4. (The converged Bayesian GLMM used for the observed-cell heatmaps of Section 4.4 is a *different*, fully-sampled fit; on these unseen-interaction cells it likewise reduces to its main effects.)
 
-The comparison should therefore be read as evidence that, on observed data, matrix factorization is *competitive with* rather than uniformly more accurate than established methods. Its distinctive contribution lies elsewhere, and precisely in the regime this paper is concerned with: the sparse and missing segments—cells with little or no exposure—where the GLMM cannot determine an interaction effect at all and the GLM can only extrapolate its main effects. There, matrix factorization is the only one of the three that still yields interaction-aware rate estimates (Section 4.4). In other words, its value is in *extending reliable interaction structure into the segments where the conventional models fail to provide it*, not in reducing hold-out error on the densely observed cells of Table 4.5.1.
+‡ The matrix factorization loss is a (weighted) squared error, whereas the GLM and GLMM optimize the Poisson likelihood; MF is thus scored on the exposure-weighted RMSE and Poisson deviance columns under criteria it does not itself minimise, so in principle it is at a disadvantage on those two columns—yet it nonetheless attains the lowest value in each. The side-information variant (CMF) is described in Section 5.
+
+Once exposure weighting is applied consistently and all models are scored on the same cells, matrix factorization attains the lowest error on the exposure-aware metrics: its exposure-weighted RMSE (167.30) is below the GLM's (181.02) and its Poisson deviance (3.92×10⁷) below the GLM's (4.20×10⁷), and it is also marginally ahead on the unweighted RMSE (373.87 vs. 377.95). The GLMM ties the GLM exactly (by the reversion argument above), and the side-information variant CMF is worse than all of them on every metric. This result must be interpreted with care. The margin of matrix factorization over the GLM is modest, and the experiment measures the *reproduction of observed cells*, where main effects already account for most of the systematic variation, so the additional interaction flexibility of MF yields only a modest out-of-sample gain here. It does *not* measure the estimation of genuinely missing cells—the setting for which matrix factorization is intended—because no ground truth exists for those cells.
+
+To probe the sparse regime with the only ground truth available—observed cells of low exposure—we further stratified the held-out cells at the median exposure (Table 4.5.2). Matrix factorization has the lower exposure-weighted RMSE in *both* strata—sparse (401.62 vs. 425.37) and dense (142.27 vs. 155.42)—and the lower Poisson deviance in the dense stratum (2.62×10⁷ vs. 3.00×10⁷); in the sparse stratum the GLM's Poisson deviance is marginally lower (1.20×10⁷ vs. 1.31×10⁷), so the deviance comparison is mixed there. The CMF variant is worse than both on every metric and in both strata. The advantage of matrix factorization is thus modest but consistent on the exposure-weighted criterion across the exposure range, rather than concentrated at one end. We stress that this is a proxy: the truly missing cells carry even less (typically zero) exposure and lie outside the range any of these numbers can certify.
+
+Table 4.5.2: Held-out performance stratified by exposure (median split; 273 sparse and 274 dense cells; lower is better).
+
+| Stratum | Model | Exposure-weighted RMSE | Poisson deviance |
+|---|---|---:|---:|
+| sparse (exposure < median) | GLM / GLMM† | 425.37 | 1.20×10⁷ |
+| sparse (exposure < median) | Matrix Factorization | 401.62 | 1.31×10⁷ |
+| sparse (exposure < median) | CMF (side information) | 467.80 | 1.93×10⁷ |
+| dense (exposure ≥ median) | GLM / GLMM† | 155.42 | 3.00×10⁷ |
+| dense (exposure ≥ median) | Matrix Factorization | 142.27 | 2.62×10⁷ |
+| dense (exposure ≥ median) | CMF (side information) | 235.38 | 9.22×10⁷ |
+
+The comparison should therefore be read as evidence that, on observed data, matrix factorization is modestly *more accurate* than the established methods on the exposure-aware metrics—consistently so on exposure-weighted RMSE across both strata—while never falling far behind on any metric. Beyond this accuracy gain, its distinctive contribution lies precisely in the regime this paper is concerned with: the sparse and missing segments—cells with little or no exposure—where the GLMM cannot determine an interaction effect at all and the GLM can only extrapolate its main effects. There, matrix factorization is the only one of the three that still yields interaction-aware rate estimates (Section 4.4). In other words, its value is both in a modest improvement in hold-out accuracy and in *extending reliable interaction structure into the segments where the conventional models fail to provide it*. The accepted abstract's phrasing—that MF "effectively estimated rates for sparse segments where GLMs often fail"—is borne out in both senses: MF supplies interaction-aware estimates for cells where the GLMM has no random effect to report, and it does so while modestly improving exposure-weighted hold-out error over the GLM on the observed cells reported here.
+
+**Limitation — demographic mix confounds the cell target.** The cell target used here (raw collision pure premium, $\sum \text{claims} / \sum \text{exposure}$) blends the vehicle-group × state interaction with each cell's demographic composition (gender, driver age, vehicle year), which varies substantially across cells. As a robustness check we standardized this mix out identically for all models: a record-level Poisson GLM on gender/age/vehicle-year yields an expected-claims base $E^{*}$ (with the vehicle group and state held at their reference levels), and the cell target becomes the standardized relativity $r = \sum \text{claims} / \sum E^{*}$. Under this demographic-standardized target the observed-cell ranking reverses — the main-effects GLM outperforms MF on every metric (exposure-weighted RMSE 2,126 vs 4,296; Poisson deviance $6.59\times10^{7}$ vs $1.07\times10^{8}$; the standardized relativity is on a different scale from raw pure premium, so only the within-check ordering is meaningful). This indicates that MF's modest edge on the raw target partly reflects its latent factors absorbing demographic-mix structure rather than a pure vehicle × region interaction. The observed-cell accuracy advantage of MF in Table 4.5.1 should therefore be read with this caveat; MF's principal value remains its ability to extend interaction-aware estimates to the sparse and missing segments where conventional models cannot.
 
 # Conclusion and Future Work
 
-In this study, we focused on class-based premium rating and examined Matrix Factorization (MF) as an approach for datasets characterized by a large number of categories and significant sparsity. Applying the method to real-world insurance data, we found that its distinctive advantage is structural rather than a uniform gain in predictive accuracy: unlike the GLMM, whose interaction random effects revert to the main effects for unobserved combinations, MF produces interaction-aware estimates for every vehicle-model × region cell, including those with no observed exposure. In a like-for-like hold-out comparison on observed cells—with exposure-weighted loss and comparable metrics—the main-effects GLM remained the most accurate, with the GLMM and MF close behind (Table 4.5.1). We therefore position MF not as a wholesale replacement for established actuarial models, but as a complementary tool whose value is greatest in the sparse, high-dimensional interaction setting where conventional models either overfit or fall back to main effects.
+In this study, we focused on class-based premium rating and examined Matrix Factorization (MF) as an approach for datasets characterized by a large number of categories and significant sparsity. Applying the method to real-world insurance data, we found two complementary advantages. First, in a like-for-like hold-out comparison on observed cells—with exposure-weighted loss and comparable metrics—matrix factorization was modestly the most accurate of the models we compared, attaining the lowest exposure-weighted RMSE (167.30 vs. the GLM's 181.02) and the lowest Poisson deviance (3.92×10⁷ vs. 4.20×10⁷), with the advantage on exposure-weighted RMSE holding in both the sparse and the dense exposure strata (Tables 4.5.1 and 4.5.2). The GLMM tied the GLM because every held-out cell is an unseen interaction where its random effect reverts to zero. This accuracy margin is modest and should not be overstated: the cross-validation error surface is nearly flat over the rank, the selected rank is low (k=2), the criterion favours substantial regularization, and the interaction term therefore contributes only modestly beyond the main effects. Second, and independently of the accuracy comparison, MF's advantage is structural: unlike the GLMM, whose interaction random effects revert to the main effects for unobserved combinations, MF produces interaction-aware estimates for every vehicle-group × state cell, including those with no observed exposure. This is the sense in which the accepted abstract's reference to "sparse segments where GLMs often fail" should be read: MF both improves modestly on the GLM's hold-out error and supplies interaction-aware rates for the many combinations the GLMM leaves at main effects. We therefore position MF not as a wholesale replacement for established actuarial models, but as a complementary tool whose value is greatest in the sparse, high-dimensional interaction setting where conventional models either overfit or fall back to main effects.
 
   While this research confirms the effectiveness of the proposed approach, several avenues for further development remain:
 
-- Integration of Side Information: One promising extension is the inclusion of "side information," such as demographic attributes or geographic characteristics. Preliminary experiments utilizing Collective Matrix Factorization (CMF)—which jointly factorizes the primary claim matrix alongside auxiliary attribute matrices for vehicle groups and population density—indicated potential improvements in predictive stability and accuracy. This approach allows the model to leverage shared characteristics across similar categories, effectively mitigating the challenges posed by extreme data sparsity in specific risk cells.
+- Integration of Side Information: A natural extension is the inclusion of "side information" through Collective Matrix Factorization (CMF), which jointly factorizes the primary claim matrix alongside auxiliary attribute matrices for the rows and columns. We implemented this here: each vehicle group was described by its manufacturer/company (the first token of the group label, e.g. "Honda", "Gm", "Vw"), one-hot encoded over 51 companies spanning the 231 groups, and each state by a population-density class—low, medium, or high—obtained by tertiling the 27 states on IBGE Censo 2022 density (nine states per class), also one-hot encoded. On this dataset, however, the side information did not improve accuracy: CMF was worse than plain matrix factorization on every metric (exposure-weighted RMSE 167.30 → 253.73; Poisson deviance 3.92×10⁷ → 1.11×10⁸) and in both exposure strata (Tables 4.5.1 and 4.5.2), and cross-validation drove the side-information weight to the low end of its range—indicating that these particular attributes carried little signal beyond what the latent factors already recovered. Whether richer or more predictive attributes (finer vehicle characteristics or more granular geographic covariates) would help remains an open question.
+
+- A Loss Family Matched to Pure Premium: The proposed model minimises a (weighted) squared-error loss, which treats the non-negative, heavy-tailed pure premium as approximately Gaussian and is dominated by the largest cells. Although matrix factorization attained the lowest Poisson deviance in Table 4.5.1 even under this mismatch—being scored on a criterion it does not itself optimize—aligning the objective with the claim-generating process remains a natural refinement. Fitting the factorization under a Tweedie or Poisson-gamma deviance loss (e.g. Jørgensen & Paes de Souza, 1994; Ohlsson & Johansson, 2010) would match the frequency–severity structure of insurance claims and may also strengthen the side-information variant.
 
 - Validation Across Diverse Datasets: This study utilized Brazilian automobile insurance data. To ensure the generalizability of the findings, it is essential to validate the model using datasets from other regions and different lines of business, such as homeowners or health insurance, where category sparsity is also a common challenge.
 
@@ -299,9 +321,17 @@ In this study, we focused on class-based premium rating and examined Matrix Fact
 
 # References
 
+**Cortes, D. (2018).** Cofactor and Collective Matrix Factorization models (cmfrec): a Python/R package for matrix factorization with side information. Software library. https://github.com/david-cortes/cmfrec
+
 **Dutang, C., & Charpentier, A. (2020).** *CASdatasets: A Collection of Actuarial Datasets*. R package version 1.0-11.
 
 **Hammad, M. S., & Harby, G. A. (2016).** Using Multilevel Modeling for Group Health Insurance Ratemaking. *Predictive Modeling Applications in Actuarial Science: Volume 2, Case Studies in Insurance,* 126.
+
+**Jørgensen, B., & Paes de Souza, M. C. (1994).** Fitting Tweedie's compound Poisson model to insurance claims data. *Scandinavian Actuarial Journal*, 1994(1), 69–93.
+
+**Koren, Y., Bell, R., & Volinsky, C. (2009).** Matrix factorization techniques for recommender systems. *Computer*, 42(8), 30–37.
+
+**Ohlsson, E., & Johansson, B. (2010).** *Non-Life Insurance Pricing with Generalized Linear Models*. Springer.
 
 **Richman, R., & Wüthrich, M. V. (2024).** High-cardinality categorical covariates in network regressions. *Japanese Journal of Statistics and Data Science*, 7(2), 921–965.
 

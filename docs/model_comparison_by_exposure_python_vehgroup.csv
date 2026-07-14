@@ -1,0 +1,7 @@
+stratum,model,n,wRMSE,PoissonDev
+sparse (exposure < median),MF (weighted),406,554.7592603202567,22463322.74841421
+sparse (exposure < median),GLM,406,548.2915489047065,21560651.32374877
+sparse (exposure < median),GLMM,406,548.2915489047065,21560651.32374877
+dense  (exposure >= median),MF (weighted),406,113.6665613386116,25934599.289756127
+dense  (exposure >= median),GLM,406,110.20486498046857,22575087.1048842
+dense  (exposure >= median),GLMM,406,110.20486498046857,22575087.1048842

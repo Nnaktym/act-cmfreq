@@ -23,6 +23,14 @@ CLAIM_TYPES = [
     "ClaimAmountFire", "ClaimAmountOther",
 ]
 
+# Collision-only components (部分衝突 + 全損衝突). The active analysis targets
+# collision claims: heavy-tail perils (theft/total-loss/fire) dominate the L2
+# loss and "Other" swamps the frequency signal, so restricting the numerator to
+# collision gives a meaningful, well-conditioned target for both pure premium
+# and frequency. CLAIM_TYPES (all 5) is retained only for load_standardized_relativity.
+COLLISION_AMOUNT = ["ClaimAmountPartColl", "ClaimAmountTotColl"]
+COLLISION_NB = ["ClaimNbPartColl", "ClaimNbTotColl"]
+
 
 # =============================================================================
 # Data loading / aggregation
@@ -60,35 +68,181 @@ def get_total(data, category_to_analyze, aggregate_col, threshold=None):
     return total
 
 
-def load_pure_premium(csv_path="data/brvehins_org.csv", brand="Honda",
-                      cell_exposure_min=100, model_exposure_min=10):
-    """Build the vehicle-model x region pure-premium and exposure matrices.
+def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
+                     target="pure_premium", cell_exposure_min=100,
+                     model_exposure_min=10, row_col="VehModel", col_col="Area"):
+    """Build the vehicle x region rate and exposure matrices.
 
-    Reproduces the R preprocessing (Sections 2-3): filter to one brand, sum the
-    claim components, aggregate claims and exposure to a model x region matrix,
-    keep only cells with exposure >= `cell_exposure_min` (others become NaN =
-    missing) and models whose total exposure exceeds `model_exposure_min`.
+    Reproduces the R preprocessing (Sections 2-3): optionally filter to one
+    brand (`brand=None` keeps every manufacturer), aggregate the COLLISION
+    claim numerator and exposure to a `row_col` x region matrix, keep only cells
+    with exposure >= `cell_exposure_min` (others become NaN = missing) and
+    rows whose total exposure exceeds `model_exposure_min`.
+
+    `row_col` chooses the row granularity: "VehModel" (~4200 trim-level models,
+    the default / canonical analysis) or "VehGroup" (~436 model families, a
+    coarser, much denser matrix).
+
+    The numerator is restricted to collision claims (部分衝突 + 全損衝突):
+      * target="pure_premium": numerator = sum(COLLISION_AMOUNT)  (claim amount)
+      * target="frequency":    numerator = sum(COLLISION_NB)      (claim count)
+    Either way the rate is numerator / ExposTotal, and total exposure serves as
+    the credibility weight / GLM offset. Cells whose collision claims are zero
+    (rate = 0) are valid observations, not missing.
 
     Returns
     -------
-    (pure_premium, exposure_total) : both wide DataFrames sharing index/columns.
-        pure_premium = total claim / total exposure (NaN where missing).
+    (rate, exposure_total) : both wide DataFrames sharing index/columns.
     """
-    brv = load_bravehins(csv_path)
-    brv = brv[brv["VehModel"].str.contains(brand, na=False)]
-    brv["ClaimTotal"] = brv[CLAIM_TYPES].sum(axis=1)
+    if target == "pure_premium":
+        num_cols = COLLISION_AMOUNT
+    elif target == "frequency":
+        num_cols = COLLISION_NB
+    else:
+        raise ValueError(f"target must be 'pure_premium' or 'frequency', got {target!r}")
 
-    cats = ["VehModel", "Area"]
+    brv = load_bravehins(csv_path)
+    if brand is not None:
+        brv = brv[brv["VehModel"].str.contains(brand, na=False)]
+    brv = brv.copy()
+    brv["Numerator"] = brv[num_cols].sum(axis=1)
+
+    cats = [row_col, col_col]
     exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
-    claim_total = get_total(brv, cats, "ClaimTotal")
+    numerator_total = get_total(brv, cats, "Numerator")
 
     keep = exposure_total.sum(axis=1, skipna=True) > model_exposure_min
     exposure_total = exposure_total.loc[keep]
-    claim_total = claim_total.reindex(index=exposure_total.index,
-                                      columns=exposure_total.columns)
+    numerator_total = numerator_total.reindex(index=exposure_total.index,
+                                              columns=exposure_total.columns)
 
-    pure_premium = claim_total / exposure_total
-    return pure_premium, exposure_total
+    rate = numerator_total / exposure_total
+    return rate, exposure_total
+
+
+def load_pure_premium(csv_path="data/brvehins1_full.csv", brand=None,
+                      cell_exposure_min=100, model_exposure_min=10):
+    """Collision pure-premium rate matrix -- thin wrapper over load_cell_matrix.
+
+    Kept so existing imports (`from ratemaking import load_pure_premium`) stay
+    valid. Returns (pure_premium, exposure_total).
+    """
+    return load_cell_matrix(csv_path=csv_path, brand=brand, target="pure_premium",
+                            cell_exposure_min=cell_exposure_min,
+                            model_exposure_min=model_exposure_min)
+
+
+def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
+                                 cell_exposure_min=100, model_exposure_min=10,
+                                 row_col="VehModel", col_col="Area",
+                                 collision_only=False):
+    """Build a demographically-standardized row x column risk matrix.
+
+    The raw cell pure premium (load_pure_premium) confounds model x region risk
+    with each cell's gender / driver-age / vehicle-year MIX, which varies
+    strongly across cells (per-cell male-exposure share ranges 0..1). To isolate
+    the model x region signal, we first fit a record-level Poisson GLM on those
+    demographic factors -- controlling for model/area so the demographic
+    relativities are unbiased -- then form a demographic *expected-claims* base
+
+        E*_record = exposure x exp(intercept + demographic linear predictor)
+
+    by predicting with VehModel and Area held at their reference level. The cell
+    target becomes the standardized relativity  r_ij = sum(claim) / sum(E*), and
+    E* replaces exposure as the credibility weight / GLM offset. Demographic mix
+    is thereby removed identically for every downstream model (GLM/GLMM/MF/CMF),
+    so the comparison reflects the model x region interaction, not who happens to
+    drive those cars in those regions.
+
+    Assumption: demographics act multiplicatively and do not interact with the
+    model x region cell (no three-way interaction) -- the standard working
+    assumption for a-priori relativity offsets.
+
+    `row_col` / `col_col` choose the matrix axes (default "VehModel" x "Area";
+    e.g. "VehGroup" x "State" for the coarser variant). Both are included in the
+    demographic GLM design and forced to their reference level when forming E*,
+    so E* carries only the demographic + intercept effect regardless of which
+    axes are chosen. When `collision_only=True` the relativity numerator is the
+    collision claim AMOUNT (COLLISION_AMOUNT) and the demographic frequency GLM
+    response is the collision claim COUNT (COLLISION_NB); otherwise the existing
+    all-claims (5-peril) numerator / count are used.
+
+    Returns (relativity, expected_base): a drop-in replacement for the
+    (pure_premium, exposure_total) pair returned by load_pure_premium().
+    """
+    from sklearn.linear_model import PoissonRegressor
+    from sklearn.preprocessing import OneHotEncoder
+
+    if collision_only:
+        amount_cols = COLLISION_AMOUNT
+        nb_cols = COLLISION_NB
+    else:
+        amount_cols = CLAIM_TYPES
+        nb_cols = ["ClaimNbRob", "ClaimNbPartColl", "ClaimNbTotColl",
+                   "ClaimNbFire", "ClaimNbOther"]
+    brv = load_bravehins(csv_path)
+    if brand is not None:
+        brv = brv[brv["VehModel"].str.contains(brand, na=False)].copy()
+    brv["ClaimTotal"] = brv[amount_cols].sum(axis=1)
+    brv["ClaimNbTotal"] = brv[nb_cols].sum(axis=1)
+    brv = brv[brv["ExposTotal"] > 0].copy()
+    # missing demographics -> explicit "Unknown" level so every record keeps an
+    # E* (dropping would lose exposure and leave those cells un-aggregatable)
+    brv["Gender"] = brv["Gender"].fillna("Unknown")
+    brv["DrivAge"] = brv["DrivAge"].fillna("Unknown")
+
+    # demographic FREQUENCY GLM (claim counts, Poisson) -> stable, standard for
+    # a-priori relativities. We control for coarse vehicle risk via VehGroup and
+    # for Area so the demographic relativities are de-biased, then strip those
+    # out to leave a demographic-adjusted "equivalent exposure". (A Poisson fit
+    # on claim AMOUNTS diverges here; frequency is the natural, stable choice.)
+    #
+    # Poisson is closed under aggregation of identical-covariate records, so we
+    # fit on counts COLLAPSED to the unique (Gender, DrivAge, VehYear, VehGroup,
+    # Area) combos. We fit with a SPARSE one-hot design (scikit-learn) rather than
+    # statsmodels' dense patsy matrix: with a 436-level VehGroup on the full ~2M
+    # -row multi-brand data the dense design is ~550 wide and blows up memory,
+    # whereas the sparse one has only 5 non-zeros per row. Fitting the rate
+    # y = count / exposure with sample_weight = exposure reproduces the offset
+    # -Poisson MLE exactly; a tiny L2 (alpha) just resolves the one-hot collinearity.
+    gcols = ["Gender", "DrivAge", "VehYear", row_col, col_col]
+    agg = (brv.groupby(gcols, observed=True)
+              .agg(ClaimNbTotal=("ClaimNbTotal", "sum"),
+                   ExposTotal=("ExposTotal", "sum")).reset_index())
+    agg = agg[agg["ExposTotal"] > 0]
+    enc = OneHotEncoder(handle_unknown="ignore", dtype=np.float64)
+    X = enc.fit_transform(agg[gcols].astype(str))
+    demo = PoissonRegressor(alpha=1e-8, fit_intercept=True, max_iter=1000)
+    demo.fit(X, agg["ClaimNbTotal"] / agg["ExposTotal"],
+             sample_weight=agg["ExposTotal"].to_numpy())
+
+    # E* = exposure x rate, with VehGroup & Area forced to their reference level
+    # so only exposure + demographics survive. The predicted rate then depends
+    # ONLY on (Gender, DrivAge, VehYear) -> a small lookup we predict once and
+    # broadcast onto every record (memory-light for millions of rows).
+    ref_keys = ["Gender", "DrivAge", "VehYear"]
+    rate_tbl = brv[ref_keys].drop_duplicates().copy()
+    rate_tbl[row_col] = sorted(brv[row_col].dropna().unique())[0]
+    rate_tbl[col_col] = sorted(brv[col_col].dropna().unique())[0]
+    rate_tbl["rate"] = demo.predict(enc.transform(rate_tbl[gcols].astype(str)))
+    brv = brv.merge(rate_tbl[ref_keys + ["rate"]], on=ref_keys, how="left")
+    brv["expected_base"] = brv["ExposTotal"] * brv["rate"]
+
+    cats = [row_col, col_col]
+    exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
+    claim_total = get_total(brv, cats, "ClaimTotal")
+    ebase_total = get_total(brv, cats, "expected_base")
+
+    keep = exposure_total.sum(axis=1, skipna=True) > model_exposure_min
+    exposure_total = exposure_total.loc[keep]
+    idx, cols = exposure_total.index, exposure_total.columns
+    claim_total = claim_total.reindex(index=idx, columns=cols)
+    ebase_total = ebase_total.reindex(index=idx, columns=cols)
+
+    # relativity, missing exactly where the cell has too little exposure (<min)
+    relativity = (claim_total / ebase_total).mask(exposure_total.isna())
+    ebase_total = ebase_total.mask(exposure_total.isna())
+    return relativity, ebase_total
 
 
 def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=True):
@@ -98,6 +252,51 @@ def wide_to_long_format(wide_df, value_names=("var1", "var2", "value"), na_omit=
     if na_omit:
         long_df = long_df.dropna()
     return long_df
+
+
+def build_side_info(pure_premium, csv_path="data/brvehins1_full.csv",
+                    density_path="data/brazil_population_density.csv"):
+    """Build row/column side-information matrices for Collective MF (CMF).
+
+    For the VehGroup x State configuration:
+
+    * Row side info (U): the manufacturer / COMPANY of each vehicle-group row,
+      taken as the first token of the VehGroup label (e.g. "Gm Chevrolet Kadett"
+      -> "Gm", "Honda Motos Ate 450cc" -> "Honda"), one-hot encoded. It groups
+      the ~200 vehicle groups into their maker so sparse/cold rows can borrow
+      strength from same-company groups.
+    * Column side info (I): the population-density CLASS of each State (IBGE
+      Censo 2022), tertiled across the 27 states into low / medium / high and
+      one-hot encoded. Density spans ~2.5-493 hab/km²; a three-level class is a
+      robust urban/rural proxy that avoids committing to a single cut point.
+
+    U is aligned to `pure_premium`'s index (vehicle groups), I to its columns
+    (States). Returns (U, I, u_labels, i_labels) with U, I as float numpy arrays
+    of shape (n_groups, p_u) and (n_states, p_i).
+
+    `csv_path` is accepted for signature stability but no longer read (the
+    company is derived from the row label itself).
+    """
+    groups = pure_premium.index
+    states = pure_premium.columns
+
+    # ---- row side info: manufacturer / company one-hot ----------------------
+    company = groups.to_series().str.split().str[0]
+    U = pd.get_dummies(company).astype(float)
+
+    # ---- column side info: State population-density class (tertiles) --------
+    dens = pd.read_csv(density_path)
+    # each State's IBGE density: single-state rows carry the state-level value
+    state_density = (dens[dens["note"] == "single-state"]
+                     .drop_duplicates("parent_state")
+                     .set_index("parent_state")["density_km2"])
+    d = state_density.reindex(states).astype(float)
+    dclass = pd.qcut(d, q=3, labels=["dens_low", "dens_med", "dens_high"])
+    # unmatched state (if any) -> all-zero class row (get_dummies drops NaN)
+    I = pd.get_dummies(dclass).astype(float).reindex(states, fill_value=0.0)
+
+    return (U.to_numpy(dtype=float), I.to_numpy(dtype=float),
+            list(U.columns), list(I.columns))
 
 
 # =============================================================================
@@ -162,13 +361,17 @@ def get_prediction(model, X):
     return X_pred
 
 
-def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None):
+def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None,
+                    U=None, I=None, w_main=1.0, w_user=1.0, w_item=1.0):
     """CV grid search over (k, lambda) for CMF (cf. cmf.R::optimize_params).
 
     If `W` (per-cell weights, same shape as X) is given, the CMF loss is
     weighted -- so the tuned lambda is calibrated for the SAME weighted loss
     used in the final fit (otherwise a weighted final fit would be effectively
-    unregularized). Returns the best row as {"k", "lambda", "cv_score"}.
+    unregularized). If `U` / `I` (row / column side-information matrices) are
+    given, the search tunes the Collective MF variant with those attributes,
+    using the same w_main/w_user/w_item weighting as the final fit so the tuned
+    (k, lambda) transfer. Returns the best row as {"k", "lambda", "cv_score"}.
     """
     cv_split = k_fold_split(X, k=n_folds, seed=random_seed)
     records = []
@@ -180,8 +383,9 @@ def optimize_params(X, n_folds, k_values, lambda_values, random_seed=123, W=None
                 X_val = cv_split["folds"][i]["val"]
                 model = CMF(
                     k=k, lambda_=lam, method="als", niter=30,
-                    nonneg=True, verbose=False,
-                ).fit(X_train, W=W)
+                    nonneg=True, verbose=False, center=False,
+                    w_main=w_main, w_user=w_user, w_item=w_item,
+                ).fit(X_train, W=W, U=U, I=I)
                 pred = get_prediction(model, X_val)
                 cv_score += calc_rmse(pred, X_val, show=False) / n_folds
             print(f"k: {k} lambda: {lam} CV RMSE: {cv_score}")

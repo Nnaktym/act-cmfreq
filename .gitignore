@@ -11,3 +11,6 @@ data/
 # Python
 __pycache__/
 *.pyc
+
+# ad-hoc R scratch (install logs, temp exports)
+scratch_r/
