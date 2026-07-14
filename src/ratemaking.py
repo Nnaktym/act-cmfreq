@@ -133,8 +133,10 @@ def load_pure_premium(csv_path="data/brvehins1_full.csv", brand=None,
 
 
 def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
-                                 cell_exposure_min=100, model_exposure_min=10):
-    """Build a demographically-standardized vehicle-model x region risk matrix.
+                                 cell_exposure_min=100, model_exposure_min=10,
+                                 row_col="VehModel", col_col="Area",
+                                 collision_only=False):
+    """Build a demographically-standardized row x column risk matrix.
 
     The raw cell pure premium (load_pure_premium) confounds model x region risk
     with each cell's gender / driver-age / vehicle-year MIX, which varies
@@ -156,19 +158,33 @@ def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
     model x region cell (no three-way interaction) -- the standard working
     assumption for a-priori relativity offsets.
 
+    `row_col` / `col_col` choose the matrix axes (default "VehModel" x "Area";
+    e.g. "VehGroup" x "State" for the coarser variant). Both are included in the
+    demographic GLM design and forced to their reference level when forming E*,
+    so E* carries only the demographic + intercept effect regardless of which
+    axes are chosen. When `collision_only=True` the relativity numerator is the
+    collision claim AMOUNT (COLLISION_AMOUNT) and the demographic frequency GLM
+    response is the collision claim COUNT (COLLISION_NB); otherwise the existing
+    all-claims (5-peril) numerator / count are used.
+
     Returns (relativity, expected_base): a drop-in replacement for the
     (pure_premium, exposure_total) pair returned by load_pure_premium().
     """
     from sklearn.linear_model import PoissonRegressor
     from sklearn.preprocessing import OneHotEncoder
 
-    claim_nb = ["ClaimNbRob", "ClaimNbPartColl", "ClaimNbTotColl",
-                "ClaimNbFire", "ClaimNbOther"]
+    if collision_only:
+        amount_cols = COLLISION_AMOUNT
+        nb_cols = COLLISION_NB
+    else:
+        amount_cols = CLAIM_TYPES
+        nb_cols = ["ClaimNbRob", "ClaimNbPartColl", "ClaimNbTotColl",
+                   "ClaimNbFire", "ClaimNbOther"]
     brv = load_bravehins(csv_path)
     if brand is not None:
         brv = brv[brv["VehModel"].str.contains(brand, na=False)].copy()
-    brv["ClaimTotal"] = brv[CLAIM_TYPES].sum(axis=1)
-    brv["ClaimNbTotal"] = brv[claim_nb].sum(axis=1)
+    brv["ClaimTotal"] = brv[amount_cols].sum(axis=1)
+    brv["ClaimNbTotal"] = brv[nb_cols].sum(axis=1)
     brv = brv[brv["ExposTotal"] > 0].copy()
     # missing demographics -> explicit "Unknown" level so every record keeps an
     # E* (dropping would lose exposure and leave those cells un-aggregatable)
@@ -189,7 +205,7 @@ def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
     # whereas the sparse one has only 5 non-zeros per row. Fitting the rate
     # y = count / exposure with sample_weight = exposure reproduces the offset
     # -Poisson MLE exactly; a tiny L2 (alpha) just resolves the one-hot collinearity.
-    gcols = ["Gender", "DrivAge", "VehYear", "VehGroup", "Area"]
+    gcols = ["Gender", "DrivAge", "VehYear", row_col, col_col]
     agg = (brv.groupby(gcols, observed=True)
               .agg(ClaimNbTotal=("ClaimNbTotal", "sum"),
                    ExposTotal=("ExposTotal", "sum")).reset_index())
@@ -206,13 +222,13 @@ def load_standardized_relativity(csv_path="data/brvehins1_full.csv", brand=None,
     # broadcast onto every record (memory-light for millions of rows).
     ref_keys = ["Gender", "DrivAge", "VehYear"]
     rate_tbl = brv[ref_keys].drop_duplicates().copy()
-    rate_tbl["VehGroup"] = sorted(brv["VehGroup"].dropna().unique())[0]
-    rate_tbl["Area"] = sorted(brv["Area"].dropna().unique())[0]
+    rate_tbl[row_col] = sorted(brv[row_col].dropna().unique())[0]
+    rate_tbl[col_col] = sorted(brv[col_col].dropna().unique())[0]
     rate_tbl["rate"] = demo.predict(enc.transform(rate_tbl[gcols].astype(str)))
     brv = brv.merge(rate_tbl[ref_keys + ["rate"]], on=ref_keys, how="left")
     brv["expected_base"] = brv["ExposTotal"] * brv["rate"]
 
-    cats = ["VehModel", "Area"]
+    cats = [row_col, col_col]
     exposure_total = get_total(brv, cats, "ExposTotal", cell_exposure_min)
     claim_total = get_total(brv, cats, "ClaimTotal")
     ebase_total = get_total(brv, cats, "expected_base")
