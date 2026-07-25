@@ -106,10 +106,8 @@ def main(target="pure_premium"):
     grid = np.full(pp.shape, np.nan)
     grid[r, c] = rate_mean
     grid_df = pd.DataFrame(grid, index=pure_premium.index, columns=pure_premium.columns)
-    # restrict to Honda vehicle groups so the GLMM heatmaps match the other paper
-    # figures (fig_4_2_1 etc.), which use Honda groups as the running example
-    honda = grid_df.index.to_series().str.contains("Honda", na=False).to_numpy()
-    grid_df = grid_df.loc[grid_df.index[honda]]
+    # Show the full vehicle-group x state matrix, matching the other paper figures
+    # (fig_4_2_1 etc.), which are now rendered over all retained vehicle groups.
     hmax = float(np.nanpercentile(rate_mean, 99)) or 1.0
     visualize_heatmap(grid_df, "Estimated Pure Premium Rates -- GLMM (pymc, observed cells)",
                       max_limit=hmax, fig_path=f"paper/fig_4_4_1{sfx}.png")

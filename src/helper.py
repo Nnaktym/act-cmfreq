@@ -98,6 +98,8 @@ def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
     if brand is not None:
         brv = brv[brv["VehModel"].str.contains(brand, na=False)]
     brv = brv.copy()
+    # numerator = collision claim AMOUNT (pure premium) or COUNT (frequency)
+    num_cols = COLLISION_AMOUNT if target == "pure_premium" else COLLISION_NB
     brv["Numerator"] = brv[num_cols].sum(axis=1)
 
     cats = [row_col, col_col]
@@ -450,15 +452,26 @@ def visualize_heatmap(data, title="", max_limit=5000, fig_path=None):
     `data` is a wide DataFrame (index = model, columns = region).
     """
     mat = np.asarray(data, dtype=float)
-    plt.figure(figsize=(15, 10))
+    n_rows = mat.shape[0]
+    # Height grows with the row count so the full vehicle-group x state matrix
+    # (231 x 27) stays legible; capped so it never becomes an unwieldy canvas.
+    height = min(22, max(8, n_rows * 0.06))
+    plt.figure(figsize=(11, height))
     im = plt.imshow(mat, aspect="auto", cmap="viridis", vmin=0, vmax=max_limit)
     plt.colorbar(im, label="Pure Premium")
-    plt.xlabel("Category")
-    plt.ylabel("Model")
+    plt.xlabel("State")
+    plt.ylabel(f"Vehicle Group (n={n_rows})")
     plt.title(title)
     if hasattr(data, "columns"):
         plt.xticks(range(mat.shape[1]), list(data.columns), rotation=45, ha="right",
-                   fontsize=6)
+                   fontsize=7)
+    # Row labels are only legible when there are few rows (e.g. a single-brand
+    # subset); for the full matrix the per-row ticks are suppressed and the
+    # colour field itself carries the model x state pattern.
+    if hasattr(data, "index") and n_rows <= 30:
+        plt.yticks(range(n_rows), list(data.index), fontsize=7)
+    else:
+        plt.yticks([])
     if fig_path:
         plt.savefig(fig_path, bbox_inches="tight", dpi=300)
         print(f"saved {fig_path}")

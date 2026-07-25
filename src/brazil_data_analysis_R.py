@@ -350,32 +350,29 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
 
-    # The model is fit on ALL manufacturers, but the full matrix (~200 groups) is
-    # unreadable as a heatmap, so heatmaps are restricted to the Honda vehicle
-    # groups (the paper's running example). Scatters stay on the full eval set.
-    honda = pure_premium.index.to_series().str.contains("Honda", na=False).to_numpy()
-    def _honda(df):
-        return df.loc[df.index[honda]]
+    # The model is fit on ALL manufacturers, and the full 231 x 27 matrix is shown
+    # directly as a heatmap (all retained vehicle groups, not a single-brand
+    # subset). Scatters stay on the full eval set.
 
     # ---- MF: full-data refit -> all-cell estimates -------------------------
     mf_full = _fit_weighted_mf(pp_mat, W_full, best)
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
     # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(_honda(pure_premium), "actual (Honda groups)", max_limit=hmax,
+    visualize_heatmap(pure_premium, "actual", max_limit=hmax,
                       fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
-    visualize_heatmap(_honda(_to_df(estimated_mf)), "pred: MF (weighted, Honda groups)",
+    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)",
                       max_limit=hmax, fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
 
-    visualize_heatmap(_honda(pure_premium),
-                      "Actual Claim Costs by Vehicle Group and State (Honda)",
+    visualize_heatmap(pure_premium,
+                      "Actual Claim Costs by Vehicle Group and State",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_2_1{sfx}.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
                            fig_path=f"{PAPER_DIR}/fig_4_5_1{sfx}.png")
     visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
                            max_lim=smax, fig_path=f"{PAPER_DIR}/fig_4_6_1{sfx}.png")
-    visualize_heatmap(_honda(_to_df(estimated_mf)),
-                      "Estimated Pure Premium Rates (Matrix Factorization, Honda groups)",
+    visualize_heatmap(_to_df(estimated_mf),
+                      "Estimated Pure Premium Rates (Matrix Factorization)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_5_2{sfx}.png")
 
     # ---- full-data GLM ------------------------------------------------------
@@ -388,8 +385,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     glm_obs = _predict_glm(glm_f, full_long, target)
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
-    visualize_heatmap(_honda(_to_df(g_obs)),
-                      "Estimated Pure Premium Rates -- GLM (Honda groups; white = missing)",
+    visualize_heatmap(_to_df(g_obs),
+                      "Estimated Pure Premium Rates -- GLM (white = missing)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_2{sfx}.png")
 
     # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
@@ -408,8 +405,8 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     if predictable.any():
         pr = _predict_glm(glm_f, all_long[predictable], target)
         glm_all_flat[predictable] = pr
-    visualize_heatmap(_honda(_to_df(glm_all_flat.reshape(len(models), len(areas)))),
-                      "Predicted Pure Premium Rates -- Main-Effects GLM (Honda groups, all cells)",
+    visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
+                      "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
                       max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
