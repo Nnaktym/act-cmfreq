@@ -1,23 +1,7 @@
 """
 =============================================================================
 Brazil auto insurance data analysis (matrix factorization for class ratemaking)
-Python analysis (MAIN script) -- based on brazil_data_analysis_R.R (+ cmf.R)
 =============================================================================
-
-Primary Python implementation of the ratemaking analysis. Shared helpers live in
-ratemaking.py; this file orchestrates the pipeline and implements the core
-methodological fixes raised in review:
-
-  * REVIEWER FIX #1 -- single comparison on the SAME held-out cells. MF, GLM and
-    GLMM are all scored on one identical test set, in one table
-    (docs/model_comparison_python.csv), instead of MF-only hold-out vs
-    GLM/GLMM in-sample.
-  * REVIEWER FIX #2 -- exposure-weighted MF. The MF loss is weighted by exposure
-    (W=) so a cell of exposure 100 no longer counts the same as one of 50,000,
-    matching the offset(log(exposure)) weighting of the GLM / GLMM.
-  * Comparable metrics -- RMSE, exposure-weighted RMSE, and Poisson deviance
-    (count scale) are reported side by side, not RMSE-in-currency alone.
-  * No leakage -- the test set is held out BEFORE the CV grid search.
 
 Structure:
   prepare_data()            -> pure-premium / exposure matrices + CMF weights
@@ -42,7 +26,6 @@ Dependencies: pandas, numpy, matplotlib, cmfrec, statsmodels
 """
 
 import os
-import sys
 
 import numpy as np
 import pandas as pd
@@ -50,7 +33,7 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from cmfrec import CMF
 
-from ratemaking import (
+from helper import (
     build_side_info,
     get_prediction,
     load_cell_matrix,
@@ -70,9 +53,13 @@ WEIGHT_GRID = [(1.0, 0.05, 0.05), (1.0, 0.15, 0.15),
                (1.0, 0.25, 0.25), (1.0, 0.5, 0.5)]
 CMF_WEIGHT_K_GRID = range(2, 28, 3)
 
-FIG_DIR = "figs/python_port"
-PAPER_DIR = "paper"
-DOCS_DIR = "docs"
+# Anchor all paths to the project root (parent of this file's src/ dir) so the
+# script runs from any working directory, not just the repo root.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_CSV = os.path.join(_ROOT, "data", "brvehins1_full.csv")
+FIG_DIR = os.path.join(_ROOT, "figs", "python_port")
+PAPER_DIR = os.path.join(_ROOT, "paper")
+DOCS_DIR = os.path.join(_ROOT, "docs")
 # Latent-factor grid. The rank is bounded by the smaller matrix dimension (27
 # States): for k > 27 the item factor matrix (27 x k) is over-parameterized and
 # adds no representational capacity, so the search tops out at 27.
@@ -99,6 +86,40 @@ def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
     return df
 
 
+def _fit_glm(long_df, target):
+    """Fit the main-effects benchmark GLM on a long frame.
+
+    Pure premium is a continuous, non-negative loss-per-exposure response with a
+    point mass at zero, so the standard actuarial family is Tweedie (compound
+    Poisson-Gamma, 1 < p < 2); we fit the rate directly with exposure as the
+    prior weight, i.e. E[PP] = exp(Xb), Var[PP] = phi * mu^p / exposure. (Modeling
+    the total loss with a log(exposure) OFFSET would only coincide with this at
+    p = 1, so for p != 1 the weighted-rate form is the correct one.)
+    The frequency variant is genuine count data, so it keeps the canonical
+    Poisson GLM on counts with a log(exposure) offset.
+    """
+    if target == "frequency":
+        return smf.glm(
+            "claim ~ C(VehModel) + C(Area)", data=long_df,
+            family=sm.families.Poisson(), offset=np.log(long_df["exposure"]),
+        ).fit()
+    # Tweedie(var_power=1.5) defaults to a log link in statsmodels.
+    return smf.glm(
+        "pure_premium ~ C(VehModel) + C(Area)", data=long_df,
+        family=sm.families.Tweedie(var_power=1.5),
+        var_weights=long_df["exposure"],
+    ).fit()
+
+
+def _predict_glm(model, df, target):
+    """Predicted rate (pure premium, or frequency) for each row of ``df``."""
+    if target == "frequency":
+        return (model.predict(df, offset=np.log(df["exposure"]))
+                / df["exposure"]).to_numpy()
+    # weighted-rate Tweedie predicts the rate (pure premium) directly
+    return model.predict(df).to_numpy()
+
+
 # =============================================================================
 # 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
@@ -119,7 +140,7 @@ def prepare_data(target="pure_premium", cell_exposure_min=100):
     # churn the downstream code keeps the pandas keys "VehModel"/"Area", but with
     # this configuration those keys carry vehicle GROUPS and STATES respectively.
     pure_premium, exposure_total = load_cell_matrix(
-        csv_path="data/brvehins1_full.csv", brand=None, target=target,
+        csv_path=DATA_CSV, brand=None, target=target,
         cell_exposure_min=cell_exposure_min,
         row_col="VehGroup", col_col="State")
     pp_mat = pure_premium.to_numpy(dtype=float)
@@ -223,19 +244,10 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="
         "VehModel": models[er], "Area": areas[ec],
         "pure_premium": act, "exposure": expw,
     })
-    # centered log(exposure) as the GLMM's exposure covariate (keeps its
-    # coefficient well-scaled so the MAP fit stays stable)
-    le_mean = float(np.log(train_long["exposure"]).mean())
-    train_long["log_exposure"] = np.log(train_long["exposure"]) - le_mean
-    test_long["log_exposure"] = np.log(test_long["exposure"]) - le_mean
 
-    # ---- GLM (main effects, Poisson, offset log(exposure)) -----------------
-    glm = smf.glm(
-        "claim ~ C(VehModel) + C(Area)", data=train_long,
-        family=sm.families.Poisson(), offset=train_long["log_exposure"],
-    ).fit()
-    glm_pred = (glm.predict(test_long, offset=test_long["log_exposure"])
-                / test_long["exposure"]).to_numpy()
+    # ---- GLM (main effects; Tweedie for pure premium, Poisson for frequency) --
+    glm = _fit_glm(train_long, target)
+    glm_pred = _predict_glm(glm, test_long, target)
 
     # ---- GLMM (interaction as random intercept) ----------------------------
     # Every held-out cell is an UNSEEN vehicle-model x area interaction, so the
@@ -370,13 +382,10 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     obs_r, obs_c = np.where(obs_cells)
     full_long = _long_frame(models, areas, obs_r, obs_c, pp_mat, exp_mat)
 
-    glm_f = smf.glm("claim ~ C(VehModel) + C(Area)", data=full_long,
-                    family=sm.families.Poisson(),
-                    offset=np.log(full_long["exposure"])).fit()
+    glm_f = _fit_glm(full_long, target)
 
     # Fig 4.3.2 -- GLM observed cells only (white = missing)
-    glm_obs = (glm_f.predict(full_long, offset=np.log(full_long["exposure"]))
-               / full_long["exposure"]).to_numpy()
+    glm_obs = _predict_glm(glm_f, full_long, target)
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
     visualize_heatmap(_honda(_to_df(g_obs)),
@@ -397,9 +406,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                    all_long["Area"].isin(known_a)).to_numpy()
     glm_all_flat = np.full(len(all_long), np.nan)
     if predictable.any():
-        pr = (glm_f.predict(all_long[predictable],
-                            offset=np.log(all_long.loc[predictable, "exposure"]))
-              / all_long.loc[predictable, "exposure"]).to_numpy()
+        pr = _predict_glm(glm_f, all_long[predictable], target)
         glm_all_flat[predictable] = pr
     visualize_heatmap(_honda(_to_df(glm_all_flat.reshape(len(models), len(areas)))),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (Honda groups, all cells)",
@@ -426,5 +433,4 @@ def main(target="pure_premium"):
 
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "pure_premium"
-    main(target)
+    main()

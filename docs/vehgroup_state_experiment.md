@@ -115,5 +115,5 @@ python3 src/vehgroup_variant.py pure_premium
 python3 src/vehgroup_variant.py frequency
 ```
 
-行・列の粒度は `src/ratemaking.py::load_cell_matrix(row_col=..., col_col=...)` で切替。
+行・列の粒度は `src/helper.py::load_cell_matrix(row_col=..., col_col=...)` で切替。
 出力は `docs/model_comparison_python_vehgroup*.csv`（正規結果は非上書き）。

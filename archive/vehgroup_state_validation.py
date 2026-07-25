@@ -26,7 +26,7 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from cmfrec import CMF
 
-from ratemaking import (
+from helper import (
     load_cell_matrix, train_test_split, optimize_params,
     weighted_rmse, poisson_deviance,
 )

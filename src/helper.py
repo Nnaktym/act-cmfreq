@@ -94,13 +94,6 @@ def load_cell_matrix(csv_path="data/brvehins1_full.csv", brand=None,
     -------
     (rate, exposure_total) : both wide DataFrames sharing index/columns.
     """
-    if target == "pure_premium":
-        num_cols = COLLISION_AMOUNT
-    elif target == "frequency":
-        num_cols = COLLISION_NB
-    else:
-        raise ValueError(f"target must be 'pure_premium' or 'frequency', got {target!r}")
-
     brv = load_bravehins(csv_path)
     if brand is not None:
         brv = brv[brv["VehModel"].str.contains(brand, na=False)]
@@ -124,7 +117,7 @@ def load_pure_premium(csv_path="data/brvehins1_full.csv", brand=None,
                       cell_exposure_min=100, model_exposure_min=10):
     """Collision pure-premium rate matrix -- thin wrapper over load_cell_matrix.
 
-    Kept so existing imports (`from ratemaking import load_pure_premium`) stay
+    Kept so existing imports (`from helper import load_pure_premium`) stay
     valid. Returns (pure_premium, exposure_total).
     """
     return load_cell_matrix(csv_path=csv_path, brand=brand, target="pure_premium",

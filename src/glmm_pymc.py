@@ -36,7 +36,7 @@ import pandas as pd
 import pymc as pm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ratemaking import load_cell_matrix, visualize_heatmap
+from helper import load_cell_matrix, visualize_heatmap
 
 
 def main(target="pure_premium"):

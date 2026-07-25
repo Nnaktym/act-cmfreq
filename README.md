@@ -22,18 +22,19 @@ paper/          ICA2026 paper (Markdown source + figures fig_4_2_1 .. fig_4_5_2 
 data/           brvehins1_full.csv (all-manufacturer raw export, analysis input),
                 brvehins_org.csv (legacy Honda export), population density
 src/            the live analysis pipeline (Python only)
-  ratemaking.py               shared library: data load/aggregation, split/CV,
+  helper.py                   shared library: data load/aggregation, split/CV,
                               metrics, visualisation (ported from cmf.R)
   brazil_data_analysis_R.py   MAIN analysis (Python): MF vs GLM vs GLMM comparison
                               + regenerates the paper's MF/GLM figures
   glmm_pymc.py                fully-converged Bayesian Poisson GLMM (pymc) +
                               GLMM figures (fig_4_4_1/2) + per-cell uncertainty
-  sensitivity_exposure.py     exposure-threshold sensitivity analysis
 archive/        code no longer used in the analysis, kept for reference:
                 original R scripts (cmf.R, brazil_data_analysis_R.R/.ipynb,
-                export_brvehins_full.R), root R prototype (cmf.r), and the
-                pre-refactor Python CMF experiment (brazil_data_analysis_python.py).
-                See archive/README.md.
+                export_brvehins_full.R), root R prototype (cmf.r), the
+                pre-refactor Python CMF experiment (brazil_data_analysis_python.py),
+                and the variant / parameter-study scripts (vehgroup_variant.py,
+                vehgroup_state_validation.py, stdrel_variant.py,
+                sensitivity_exposure.py). See archive/README.md.
 docs/           analysis outputs (comparison tables, per-cell predictions, this
                 doc set) — see also notebook_paper_correspondence_check.md (historical)
 ```
