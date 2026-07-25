@@ -437,7 +437,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     visualize_interaction_panels(
         [("Actual", pp_mat, obs_cells),
          ("Main-effects GLM", glm_all, np.isfinite(glm_all)),
-         ("Matrix factorization, k=2", estimated_mf,
+         (f"Matrix factorization, k={best['k']}", estimated_mf,
           np.ones_like(obs_cells, dtype=bool))],
         exp_mat, row_order, col_order, areas, pp_mat.shape[0],
         fig_path=f"{out_dir}/fig_4_5_3{sfx}.png")

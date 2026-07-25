@@ -149,13 +149,19 @@ For this analysis, we utilize the brvehins1 dataset from the CASdatasets library
 
    In this study, we focus specifically on two risk factors with a high number of categories: the vehicle group (a family of related vehicle models, given by the VehGroup field) and the Brazilian state. We restrict attention to collision claims. The target variable for prediction is the historical pure premium rate, defined as the collision claim cost (total collision claim amount divided by total exposure).
 
-   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) across the Brazilian states. The full brvehins1 dataset contains 4,259 individual vehicle models, which we aggregate into 436 vehicle groups (the VehGroup field), observed across the 27 Brazilian states. To construct the observation matrix, we first retain only cells (vehicle group × state combinations) with a total exposure of 100 or more—since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low—treating all other combinations as missing values to be estimated via the proposed matrix factorization approach; we further retain only vehicle groups whose total exposure exceeds 10. The resulting matrix comprises 231 vehicle groups × 27 states, of which 2,233 cells (approximately 36%) are observed. This matrix is compact enough to be displayed in full: the heatmaps in Figures 4.2.1, 4.3.1, 4.3.2, 4.4.1, 4.4.2 and 4.5.2 show all 231 retained vehicle groups (rows) across the 27 states (columns), and the numerical comparison of Section 4.6 uses the same matrix. Because 231 rows cannot all be labelled legibly, the vertical axis is left unlabelled and the colour field itself conveys the vehicle-group × state pattern. This missingness is not completely at random: a cell is unobserved precisely because it carries little or no exposure, which is itself informative about the segment. Any imputation therefore relies on the assumption that the latent structure learned from observed cells extends to these systematically different cells—an assumption that cannot be verified directly in the absence of ground truth for the missing cells.
+   Figure 4.2.1 displays the actual claim costs (historical pure premium rates) across the Brazilian states. The full brvehins1 dataset contains 4,259 individual vehicle models, which we aggregate into 436 vehicle groups (the VehGroup field), observed across the 27 Brazilian states. To construct the observation matrix, we first retain only cells (vehicle group × state combinations) with a total exposure of 100 or more—since it is statistically challenging to determine pure premium rates from historical data when the volume of contracts is low—treating all other combinations as missing values to be estimated via the proposed matrix factorization approach; we further retain only vehicle groups whose total exposure exceeds 10. The resulting matrix comprises 231 vehicle groups × 27 states, of which 2,233 cells (approximately 36%) are observed. This matrix is compact enough to be displayed in full: the heatmaps in Figures 4.2.1, 4.3.1, 4.3.2, 4.4.1, 4.4.2 and 4.5.2 show all 231 retained vehicle groups (rows) across the 27 states (columns), and the numerical comparison of Section 4.6 uses the same matrix. Because 231 rows cannot all be labelled legibly, the vertical axis is left unlabelled; instead, in every heatmap both axes are ordered by the exposure-weighted marginal pure premium (low to high), so the dominant cost gradient runs smoothly from top-left to bottom-right and any vehicle-group × state interaction reads as a departure from that ordering. All heatmaps share one colour scale, rendered on a logarithmic scale to spread the right-skewed pure-premium distribution rather than compressing it into the dark end, and low-exposure cells that are treated as missing are shown in grey. This missingness is not completely at random: a cell is unobserved precisely because it carries little or no exposure, which is itself informative about the segment. Any imputation therefore relies on the assumption that the latent structure learned from observed cells extends to these systematically different cells—an assumption that cannot be verified directly in the absence of ground truth for the missing cells.
 
 ![fig_4_2_1](fig_4_2_1.png)
 
 Figure 4.2.1: Actual Claim Costs by Vehicle Group and State
 
    The observed matrix already exhibits an interpretable structure (exposure-weighted throughout; the overall exposure-weighted collision pure premium is 449, with a right-skewed per-cell distribution—median 500, 90th percentile 1,243). The dominant axis of variation is the vehicle group, not the state: exposure-weighted pure premium ranges roughly 23–4,020 across vehicle groups (about a 180-fold spread) but only 363–1,179 across states (about a 3-fold spread). Among vehicle groups, the highest collision costs belong to heavy commercial trucks (e.g. Iveco Stralis, Volvo, Scania and Mercedes-Benz *Caminhões*) and premium passenger cars (BMW, Audi A4), together with large pickups (Toyota Hilux); the lowest belong to small motorcycles (≤450cc Honda, Suzuki and Yamaha) and older economy cars (VW Fusca, Ford Pampa). This ordering tracks vehicle repair and replacement cost, as expected for a collision-cost target. Across states, the gradient runs opposite to population density: the sparsely populated northern and frontier states (Acre, Amapá, Tocantins, Mato Grosso, Piauí, Pará) carry the highest costs, while the dense, mature markets of the southeast—São Paulo (the lowest at 363, despite by far the largest exposure), Rio de Janeiro and Rio Grande do Sul—carry the lowest, consistent with denser dealer and parts networks lowering repair severity. A weighted two-way (vehicle-group + state) main-effects fit already explains about 83% of the exposure-weighted variation in cell pure premium, leaving roughly 17% for the vehicle × state interaction and cell-level noise—an informal, model-free counterpart to the modest interaction signal that the GLMM (σ ≈ 0.033) and the low-rank matrix factorization (k=2) recover in the following sections.
+
+   Figure 4.2.2 makes this dominance explicit by plotting the two sets of marginal effects on the same pure-premium axis: the vehicle-group effect sweeps across roughly two orders of magnitude, whereas the state effect spans only a narrow band. This is the empirical fact that motivates a low-rank treatment of the interaction—most of the signal lives in the two sets of main effects, and only a modest residual remains for the vehicle-group × state interaction.
+
+![fig_4_2_2](fig_4_2_2.png)
+
+Figure 4.2.2: Sorted Marginal Effects by Vehicle Group (left) and State (right). The dominant axis of variation is the vehicle group.
 
 ## GLM without Interaction Terms
 
@@ -179,7 +185,7 @@ lnEij serves as the offset term to account for varying exposure levels.
 
 αi and τj represent the main effects of the vehicle group and state, respectively. Note that this specification assumes no interaction between the vehicle group and the state. The model is fitted using only the observed cells where data is present.
 
-   The estimation results for pure premium rates by vehicle group and state are shown in Figure 4.3.1 and Figure 4.3.2. In Figure 4.3.2, consistent with the previous section, the uncolored (white) areas represent missing values where data was insufficient for estimation.
+   The estimation results for pure premium rates by vehicle group and state are shown in Figure 4.3.1 and Figure 4.3.2. In Figure 4.3.2, consistent with the previous section, the grey areas represent missing values where data was insufficient for estimation.
 
 ![fig_4_3_1](fig_4_3_1.png)
 
@@ -191,13 +197,13 @@ Figure 4.3.1: Heatmap of Predicted Pure Premium Rates using a Main-Effects GLM
 
 Figure 4.3.2: Estimated Pure Premium Rates by Vehicle Group and State
 
-the uncolored (white) areas represent **missing values** where data was insufficient for estimation (GLM without Interaction Terms)
+the grey areas represent **missing values** where data was insufficient for estimation (GLM without Interaction Terms)
 
 The characteristics of the estimation results are summarized below:
 
 		- Simplicity and Limitations in Interaction Modeling: While this approach is straightforward and easy to interpret, it fails to account for interaction effects. Consequently, the heatmap exhibits proportional color transitions across vehicle groups and states. Furthermore, the estimated values for non-missing cells deviate from the historical data, indicating that the model does not necessarily align with actual risk profiles.
 
-		- Extrapolation to Missing Values: By applying uniform coefficients across all categories, it is possible to calculate rates for cells with missing data. However, for categories that were entirely absent from the model-building dataset (the white spaces in the heatmap), the results represent a simple extrapolation rather than an estimation based on observed data.
+		- Extrapolation to Missing Values: By applying uniform coefficients across all categories, it is possible to calculate rates for cells with missing data. However, for categories that were entirely absent from the model-building dataset (the grey spaces in the heatmap), the results represent a simple extrapolation rather than an estimation based on observed data.
 
 ## GLMM with Interactions as Random Effects
 
@@ -221,7 +227,7 @@ Figure 4.4.1: Estimated Pure Premium Rates by Vehicle Group and State (GLMM with
 
 ![fig_4_4_2](fig_4_4_2.png)
 
-Figure 4.4.2: Estimated Pure Premium Rates by Vehicle Group and State the uncolored (white) areas represent missing values where data was insufficient for estimation (GLMM with Random Effects)
+Figure 4.4.2: Estimated Pure Premium Rates by Vehicle Group and State the grey areas represent missing values where data was insufficient for estimation (GLMM with Random Effects)
 
 The characteristics of the estimation results are summarized below:
 
@@ -265,11 +271,15 @@ The characteristics of the estimation results are summarized below:
 
 - Robust Estimation for Missing Categories: Unlike the GLMM, which struggles with unobserved cells, the matrix factorization approach successfully estimates pure premium rates for the entire matrix. For non-missing cells, the estimates remain highly consistent with the historical data presented in Section 4.2, while the missing cells are imputed with reasonable values based on the underlying latent factors of vehicle groups and states.
 
-- Capture of Non-linear Interactions: The resulting heatmap (Figure 4.5.2) displays non-uniform patterns rather than the strictly proportional changes seen in the main-effects GLM, reflecting the interaction structure introduced through the inner product of the latent factor matrices. We caution, however, that a visually richer heatmap is not by itself evidence of more accurate rates; the models should be judged by the predictive comparison in Section 4.6 (Table 4.5.1).
+- Capture of Non-linear Interactions: The resulting heatmap (Figure 4.5.2) displays non-uniform patterns rather than the strictly proportional changes seen in the main-effects GLM, reflecting the interaction structure introduced through the inner product of the latent factor matrices. Figure 4.5.3 isolates this interaction directly: for each surface we divide the estimated rate by that surface's own additive (vehicle-group + state) fit, so a value of one (white) means "fully explained by the main effects" and departures from it are pure interaction. The main-effects GLM is white everywhere by construction—it has no interaction term—whereas the matrix factorization exhibits systematic red/blue structure, the concrete visual expression of the k=2 interaction it recovers; the sparse, noisy actual data carries interaction of the same kind. We caution, however, that a visually richer heatmap is not by itself evidence of more accurate rates; the models should be judged by the predictive comparison in Section 4.6 (Table 4.5.1).
 
 - Predictive Reliability: Figure 4.5.1 shows a positive correlation between predicted and true values on the hold-out set, indicating that the model does not merely overfit the training data. As the head-to-head comparison in Section 4.6 shows, this hold-out accuracy on observed cells modestly exceeds that of the main-effects GLM on the exposure-aware metrics; a further, distinctive value of matrix factorization lies in its treatment of missing cells, discussed there and in the conclusion.
 
 By representing the interaction matrix as a low-rank product, the model is designed to filter out random noise inherent in sparse insurance data and to express risk through a small number of latent factors—which may, for example, correspond to vehicle types with similar safety profiles or states with comparable theft rates. We note that the present analysis does not establish a specific semantic meaning for the estimated factors; interpreting them substantively would require further study.
+
+![fig_4_5_3](fig_4_5_3.png)
+
+Figure 4.5.3: Vehicle-group × state interaction, shown as each surface divided by its own additive (main-effects) fit. Red = above the additive baseline, blue = below, white = no interaction. The main-effects GLM is white by construction; the matrix factorization carries structure.
 
 ## Comparison of Predictive Performance
 
