@@ -39,14 +39,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from helper import load_cell_matrix, visualize_heatmap
 
 
-def main(target="pure_premium"):
+def main(target="pure_premium", peril="collision"):
     os.makedirs("docs", exist_ok=True)
-    sfx = "" if target == "pure_premium" else "_freq"
+    sfx = ("" if peril == "collision" else f"_{peril}") + \
+          ("" if target == "pure_premium" else "_freq")
     # Same VehGroup x State configuration as the main analysis
     # (brazil_data_analysis_R.py). The pandas index carries vehicle GROUPS and the
-    # columns carry STATES.
+    # columns carry STATES. `peril` selects collision (mainline) vs theft claims.
     pure_premium, exposure_total = load_cell_matrix(
-        target=target, row_col="VehGroup", col_col="State")
+        target=target, row_col="VehGroup", col_col="State", peril=peril)
     pp = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
     models = pure_premium.index.to_numpy()
@@ -117,5 +118,5 @@ def main(target="pure_premium"):
 
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "pure_premium"
-    main(target)
+    peril = sys.argv[1] if len(sys.argv) > 1 else "collision"
+    main(peril=peril)

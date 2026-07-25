@@ -67,6 +67,13 @@ K_GRID = range(2, 28)
 LAMBDA_GRID = [0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000]
 
 
+def _suffix(target="pure_premium", peril="collision"):
+    """Output-filename suffix: "" for the collision pure-premium mainline,
+    "_theft" for theft, "_freq"/"_theft_freq" for the frequency target."""
+    return ("" if peril == "collision" else f"_{peril}") + \
+           ("" if target == "pure_premium" else "_freq")
+
+
 def _fit_weighted_mf(X, W, best):
     """Fit an exposure-weighted, non-negative CMF at the tuned (k, lambda)."""
     return CMF(
@@ -124,15 +131,16 @@ def _predict_glm(model, df, target):
 # 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
 
-def prepare_data(target="pure_premium", cell_exposure_min=100):
+def prepare_data(target="pure_premium", cell_exposure_min=100, peril="collision"):
     """Return (rate df, rate_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
 
-    The numerator is restricted to collision claims (部分衝突 + 全損衝突);
-    `target="pure_premium"` uses collision claim amount / exposure, and
-    `target="frequency"` uses collision claim count / exposure. `exp_mat`
-    holds the total exposure, serving as the credibility weight / GLM offset.
-    `cell_exposure_min` is the exposure floor below which a cell is treated as
-    missing (default 100; varied only for the sensitivity analysis).
+    `peril` selects the claim numerator ("collision" = 部分衝突 + 全損衝突, the
+    mainline analysis; "theft" = robbery claims). `target="pure_premium"` uses
+    the claim amount / exposure and `target="frequency"` the claim count /
+    exposure. `exp_mat` holds the total exposure (ExposTotal), serving as the
+    credibility weight / GLM offset for every peril. `cell_exposure_min` is the
+    exposure floor below which a cell is treated as missing (default 100; varied
+    only for the sensitivity analysis).
     """
     # Row axis = VehGroup (~200 model families), column axis = State (27 federal
     # units). This coarser, much denser matrix is the configuration adopted for
@@ -142,7 +150,7 @@ def prepare_data(target="pure_premium", cell_exposure_min=100):
     pure_premium, exposure_total = load_cell_matrix(
         csv_path=DATA_CSV, brand=None, target=target,
         cell_exposure_min=cell_exposure_min,
-        row_col="VehGroup", col_col="State")
+        row_col="VehGroup", col_col="State", peril=peril)
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
@@ -167,15 +175,16 @@ def prepare_data(target="pure_premium", cell_exposure_min=100):
 # =============================================================================
 
 def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="pure_premium",
-                   write=True):
+                   write=True, peril="collision"):
     """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM/CMF on one test set.
 
     Returns (best_params, ctx) where ctx carries the arrays the figures need.
     `write=False` suppresses all docs/figure output (used by the sensitivity
     analysis so it never clobbers the canonical results); the comparison and
-    stratified tables are still returned in ctx.
+    stratified tables are still returned in ctx. `peril` only affects the output
+    filename suffix here (the caller has already built the peril's matrices).
     """
-    sfx = "" if target == "pure_premium" else "_freq"
+    sfx = _suffix(target, peril)
     os.makedirs(FIG_DIR, exist_ok=True)
     os.makedirs(DOCS_DIR, exist_ok=True)
     models = pure_premium.index.to_numpy()
@@ -333,17 +342,22 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="
 # =============================================================================
 
 def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx,
-                           target="pure_premium"):
+                           target="pure_premium", peril="collision"):
     """Overwrite paper/fig_*.png so the paper reflects THIS Python analysis.
 
     GLM and GLMM are refit on ALL observed cells, matching the paper's final
-    (full-data) figures.
+    (full-data) figures. Each peril has its own paper (collision = the mainline;
+    theft = the theft-based paper), so figures are written to paper/ with the
+    peril suffix (fig_4_2_1.png for collision, fig_4_2_1_theft.png for theft) --
+    the suffix keeps the two papers' figures from overwriting each other.
     """
-    sfx = "" if target == "pure_premium" else "_freq"
+    sfx = _suffix(target, peril)
+    out_dir = PAPER_DIR
     # target-aware plot ceiling: currency for pure premium, small for frequency.
     hmax = float(np.nanpercentile(pp_mat[~np.isnan(pp_mat)], 99)) or 1.0
     smax = float(np.nanpercentile(ctx["act"], 99)) or 1.0
     os.makedirs(FIG_DIR, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     models, areas = ctx["models"], ctx["areas"]
     act, mf_pred = ctx["act"], ctx["mf_pred"]
 
@@ -366,14 +380,14 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
 
     visualize_heatmap(pure_premium,
                       "Actual Claim Costs by Vehicle Group and State",
-                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_2_1{sfx}.png")
+                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_2_1{sfx}.png")
     visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
-                           fig_path=f"{PAPER_DIR}/fig_4_5_1{sfx}.png")
+                           fig_path=f"{out_dir}/fig_4_5_1{sfx}.png")
     visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
-                           max_lim=smax, fig_path=f"{PAPER_DIR}/fig_4_6_1{sfx}.png")
+                           max_lim=smax, fig_path=f"{out_dir}/fig_4_6_1{sfx}.png")
     visualize_heatmap(_to_df(estimated_mf),
                       "Estimated Pure Premium Rates (Matrix Factorization)",
-                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_5_2{sfx}.png")
+                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_5_2{sfx}.png")
 
     # ---- full-data GLM ------------------------------------------------------
     obs_r, obs_c = np.where(obs_cells)
@@ -387,7 +401,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     g_obs[obs_r, obs_c] = glm_obs
     visualize_heatmap(_to_df(g_obs),
                       "Estimated Pure Premium Rates -- GLM (white = missing)",
-                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_2{sfx}.png")
+                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_3_2{sfx}.png")
 
     # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
     # BOTH its model and its area appear in the observed data (a completely
@@ -407,7 +421,7 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
         glm_all_flat[predictable] = pr
     visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
-                      max_limit=hmax, fig_path=f"{PAPER_DIR}/fig_4_3_1{sfx}.png")
+                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_3_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
     # by glmm_pymc.py -- a fully-converged Bayesian GLMM with uncertainty --
@@ -415,12 +429,16 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     # this script to (re)generate them.
 
 
-def main(target="pure_premium"):
-    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data(target)
-    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target)
-    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx, target)
+def main(target="pure_premium", peril="collision"):
+    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data(
+        target, peril=peril)
+    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat,
+                               target, peril=peril)
+    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx,
+                           target, peril=peril)
 
     print("\n================ SUMMARY ================")
+    print(f"peril            : {peril}")
     print(f"target           : {target}")
     print(f"best (k, lambda) : ({best['k']}, {best['lambda']})")
     print(f"eval test cells  : {ctx['n_eval']}")
@@ -430,4 +448,6 @@ def main(target="pure_premium"):
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    peril = sys.argv[1] if len(sys.argv) > 1 else "collision"
+    main(peril=peril)

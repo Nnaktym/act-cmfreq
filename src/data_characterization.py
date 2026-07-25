@@ -58,17 +58,19 @@ def _main_effect_r2(claim, exp, obs, models, areas):
     return fit.rsquared
 
 
-def main():
+def main(peril="collision"):
     os.makedirs(DOCS_DIR, exist_ok=True)
+    sfx = "" if peril == "collision" else f"_{peril}"
     pp_df, exp_df = load_cell_matrix(
         csv_path=DATA_CSV, brand=None, target="pure_premium",
-        row_col="VehGroup", col_col="State")
+        row_col="VehGroup", col_col="State", peril=peril)
     P = pp_df.to_numpy(float)
     E = exp_df.to_numpy(float)
     obs = ~np.isnan(P)
-    claim = np.where(obs, P * E, np.nan)   # collision claim amount per cell
+    claim = np.where(obs, P * E, np.nan)   # peril claim amount per cell
     models = pp_df.index.to_numpy()
     areas = pp_df.columns.to_numpy()
+    print(f"peril: {peril}")
 
     overall = np.nansum(claim) / np.nansum(np.where(obs, E, np.nan))
     print(f"observed cells: {int(obs.sum())}  "
@@ -92,12 +94,15 @@ def main():
     by_manu = pd.DataFrame(rows).sort_values("pp_weighted", ascending=False)
     by_manu_ranked = by_manu[by_manu["exposure"] >= MANU_MIN_EXPOSURE]
 
+    def _spread(lo, hi):
+        return f"{hi/lo:,.0f}x" if lo > 0 else f">{hi:,.0f}x (min rate is 0)"
+
     veh_range = by_veh_ranked["pp_weighted"]
     st_range = by_state["pp_weighted"]
     print(f"\nvehicle-group spread: {veh_range.min():,.0f} .. {veh_range.max():,.0f} "
-          f"({veh_range.max()/veh_range.min():.0f}x)")
+          f"({_spread(veh_range.min(), veh_range.max())})")
     print(f"state spread        : {st_range.min():,.0f} .. {st_range.max():,.0f} "
-          f"({st_range.max()/st_range.min():.1f}x)")
+          f"({_spread(st_range.min(), st_range.max())})")
 
     r2 = _main_effect_r2(claim, E, obs, models, areas)
     print(f"main-effects (veh + state) weighted R^2 on pure premium: {r2:.3f} "
@@ -111,11 +116,13 @@ def main():
     print(f"\n=== MANUFACTURER (exposure >= {MANU_MIN_EXPOSURE:,.0f}) ===")
     print(by_manu_ranked.to_string(index=False))
 
-    by_state.to_csv(f"{DOCS_DIR}/data_char_by_state.csv", index=False)
-    by_veh.to_csv(f"{DOCS_DIR}/data_char_by_vehgroup.csv", index=False)
-    by_manu.to_csv(f"{DOCS_DIR}/data_char_by_manufacturer.csv", index=False)
-    print(f"\nsaved data_char_by_state / _by_vehgroup / _by_manufacturer.csv to {DOCS_DIR}")
+    by_state.to_csv(f"{DOCS_DIR}/data_char_by_state{sfx}.csv", index=False)
+    by_veh.to_csv(f"{DOCS_DIR}/data_char_by_vehgroup{sfx}.csv", index=False)
+    by_manu.to_csv(f"{DOCS_DIR}/data_char_by_manufacturer{sfx}.csv", index=False)
+    print(f"\nsaved data_char_by_state/_by_vehgroup/_by_manufacturer{sfx}.csv to {DOCS_DIR}")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    peril = sys.argv[1] if len(sys.argv) > 1 else "collision"
+    main(peril=peril)
