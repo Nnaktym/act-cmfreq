@@ -36,7 +36,7 @@ import pandas as pd
 import pymc as pm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from helper import load_cell_matrix, visualize_heatmap
+from helper import load_cell_matrix, seriation_order, visualize_heatmap
 
 
 def main(target="pure_premium", peril="collision"):
@@ -103,17 +103,21 @@ def main(target="pure_premium", peril="collision"):
     }).to_csv(f"docs/glmm_pymc_summary{sfx}.csv", index=False)
     print(f"saved docs/glmm_pymc_summary{sfx}.csv")
 
-    # heatmap grid (observed cells only; missing left white -> paper's Fig 4.4.x)
+    # heatmap grid (observed cells only; missing shown as grey -> paper's Fig 4.4.x)
     grid = np.full(pp.shape, np.nan)
     grid[r, c] = rate_mean
     grid_df = pd.DataFrame(grid, index=pure_premium.index, columns=pure_premium.columns)
     # Show the full vehicle-group x state matrix, matching the other paper figures
-    # (fig_4_2_1 etc.), which are now rendered over all retained vehicle groups.
-    hmax = float(np.nanpercentile(rate_mean, 99)) or 1.0
+    # (fig_4_2_1 etc.): same seriation order, log colour scale and ceiling (from
+    # the actual matrix, so every paper heatmap shares one scale) and grey missing.
+    row_order, col_order = seriation_order(pp, exp_mat)
+    hmax = float(np.nanpercentile(pp[~np.isnan(pp)], 99)) or 1.0
+    hm = dict(max_limit=hmax, row_order=row_order, col_order=col_order,
+              log=True, mark_missing=True)
     visualize_heatmap(grid_df, "Estimated Pure Premium Rates -- GLMM (pymc, observed cells)",
-                      max_limit=hmax, fig_path=f"paper/fig_4_4_1{sfx}.png")
-    visualize_heatmap(grid_df, "Estimated Pure Premium Rates -- GLMM (pymc, white = missing)",
-                      max_limit=hmax, fig_path=f"paper/fig_4_4_2{sfx}.png")
+                      **hm, fig_path=f"paper/fig_4_4_1{sfx}.png")
+    visualize_heatmap(grid_df, "Estimated Pure Premium Rates -- GLMM (pymc, grey = missing)",
+                      **hm, fig_path=f"paper/fig_4_4_2{sfx}.png")
     print(f"saved paper/fig_4_4_1{sfx}.png, paper/fig_4_4_2{sfx}.png")
 
 

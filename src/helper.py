@@ -492,7 +492,8 @@ def seriation_order(pp_mat, exp_mat):
     def _marg(axis):
         num = np.sum(v * w, axis=axis)
         den = np.sum(w, axis=axis)
-        return np.where(den > 0, num / den, np.nan)
+        out = np.full_like(num, np.nan)
+        return np.divide(num, den, out=out, where=den > 0)
 
     row_eff, col_eff = _marg(1), _marg(0)
     row_order = np.argsort(np.where(np.isnan(row_eff), -1.0, row_eff))
@@ -552,23 +553,18 @@ def visualize_heatmap(data, title="", max_limit=5000, fig_path=None,
     plt.figure(figsize=(11, height))
 
     cmap = plt.get_cmap(SEQ_CMAP).copy()
-    disp = mat
     if mark_missing:
         cmap.set_bad(MISSING_COLOR)
-        disp = np.ma.masked_invalid(mat)
+    # NaN cells are always masked to grey when mark_missing; otherwise shown raw.
+    m = np.ma.masked_invalid(mat) if mark_missing else np.ma.masked_array(mat, mask=False)
     if log:
         lo = vmin if vmin is not None else 30.0
-        disp = np.ma.masked_where(np.ma.getmaskarray(np.ma.masked_invalid(disp)),
-                                  np.clip(np.nan_to_num(mat, nan=lo), lo, max_limit))
-        if mark_missing:
-            disp = np.ma.masked_invalid(mat)
-            disp = np.ma.masked_array(np.clip(disp.filled(lo), lo, max_limit),
-                                      mask=np.ma.getmaskarray(disp))
-        norm = LogNorm(vmin=lo, vmax=max_limit)
-        im = plt.imshow(disp, aspect="auto", cmap=cmap, norm=norm)
+        disp = np.ma.masked_array(np.clip(m.filled(lo), lo, max_limit),
+                                  mask=np.ma.getmaskarray(m))
+        im = plt.imshow(disp, aspect="auto", cmap=cmap, norm=LogNorm(vmin=lo, vmax=max_limit))
         cbar_label = "Pure Premium (log scale)"
     else:
-        im = plt.imshow(disp, aspect="auto", cmap=cmap, vmin=vmin or 0, vmax=max_limit)
+        im = plt.imshow(m, aspect="auto", cmap=cmap, vmin=vmin or 0, vmax=max_limit)
         cbar_label = "Pure Premium"
     plt.colorbar(im, label=cbar_label)
     ordered = row_order is not None or col_order is not None
@@ -607,8 +603,12 @@ def visualize_marginals(pp_mat, exp_mat, areas, fig_path=None):
     obs = ~np.isnan(pp)
     w = np.where(obs, np.nan_to_num(ex, nan=0.0), 0.0)
     v = np.where(obs, pp, 0.0)
-    row_eff = np.where(w.sum(1) > 0, (v * w).sum(1) / np.where(w.sum(1) > 0, w.sum(1), 1), np.nan)
-    col_eff = np.where(w.sum(0) > 0, (v * w).sum(0) / np.where(w.sum(0) > 0, w.sum(0), 1), np.nan)
+    def _marg(axis):
+        num, den = (v * w).sum(axis), w.sum(axis)
+        out = np.full_like(num, np.nan)
+        return np.divide(num, den, out=out, where=den > 0)
+
+    row_eff, col_eff = _marg(1), _marg(0)
 
     re = np.sort(row_eff[~np.isnan(row_eff)])
     ce = pd.Series(col_eff, index=list(areas)).dropna().sort_values()

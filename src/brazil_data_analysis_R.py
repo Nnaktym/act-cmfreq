@@ -39,8 +39,11 @@ from helper import (
     load_cell_matrix,
     optimize_params,
     poisson_deviance,
+    seriation_order,
     train_test_split,
     visualize_heatmap,
+    visualize_interaction_panels,
+    visualize_marginals,
     visualize_scatter_plot,
     weighted_rmse,
 )
@@ -361,6 +364,13 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     models, areas = ctx["models"], ctx["areas"]
     act, mf_pred = ctx["act"], ctx["mf_pred"]
 
+    # Shared seriation order + colour treatment for EVERY paper heatmap, so all
+    # panels (actual, GLM, GLMM, MF) use the same row/col order and log scale and
+    # therefore compare cell-for-cell. glmm_pymc.py recomputes the same order.
+    row_order, col_order = seriation_order(pp_mat, exp_mat)
+    hm = dict(max_limit=hmax, row_order=row_order, col_order=col_order,
+              log=True, mark_missing=True)
+
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
 
@@ -372,40 +382,18 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     mf_full = _fit_weighted_mf(pp_mat, W_full, best)
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
-    # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(pure_premium, "actual", max_limit=hmax,
-                      fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
-    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)",
-                      max_limit=hmax, fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
-
-    visualize_heatmap(pure_premium,
-                      "Actual Claim Costs by Vehicle Group and State",
-                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_2_1{sfx}.png")
-    visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
-                           fig_path=f"{out_dir}/fig_4_5_1{sfx}.png")
-    visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
-                           max_lim=smax, fig_path=f"{out_dir}/fig_4_6_1{sfx}.png")
-    visualize_heatmap(_to_df(estimated_mf),
-                      "Estimated Pure Premium Rates (Matrix Factorization)",
-                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_5_2{sfx}.png")
-
-    # ---- full-data GLM ------------------------------------------------------
+    # ---- full-data GLM: observed-cell and all-cell predictions -------------
     obs_r, obs_c = np.where(obs_cells)
     full_long = _long_frame(models, areas, obs_r, obs_c, pp_mat, exp_mat)
-
     glm_f = _fit_glm(full_long, target)
 
-    # Fig 4.3.2 -- GLM observed cells only (white = missing)
     glm_obs = _predict_glm(glm_f, full_long, target)
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
-    visualize_heatmap(_to_df(g_obs),
-                      "Estimated Pure Premium Rates -- GLM (white = missing)",
-                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_3_2{sfx}.png")
 
-    # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
-    # BOTH its model and its area appear in the observed data (a completely
-    # unobserved category has no GLM level); such cells stay white.
+    # All-cell GLM. A cell is predictable only if BOTH its model and its area
+    # appear in the observed data (a completely unobserved category has no GLM
+    # level); such cells stay missing (grey).
     gm = np.repeat(np.arange(len(models)), len(areas))
     ga = np.tile(np.arange(len(areas)), len(models))
     all_long = pd.DataFrame({"VehModel": models[gm], "Area": areas[ga]})
@@ -417,11 +405,45 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                    all_long["Area"].isin(known_a)).to_numpy()
     glm_all_flat = np.full(len(all_long), np.nan)
     if predictable.any():
-        pr = _predict_glm(glm_f, all_long[predictable], target)
-        glm_all_flat[predictable] = pr
-    visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
+        glm_all_flat[predictable] = _predict_glm(glm_f, all_long[predictable], target)
+    glm_all = glm_all_flat.reshape(len(models), len(areas))
+
+    # ---- paper heatmaps (shared seriation, log colour scale, grey missing) --
+    # MF diagnostics into the working figs dir
+    visualize_heatmap(pure_premium, "actual", **hm,
+                      fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
+    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)", **hm,
+                      fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
+
+    # Fig 4.2.1 actual; Fig 4.2.2 sorted marginal effects (the ~180x vs ~3x story)
+    visualize_heatmap(pure_premium,
+                      "Actual Claim Costs by Vehicle Group and State", **hm,
+                      fig_path=f"{out_dir}/fig_4_2_1{sfx}.png")
+    visualize_marginals(pp_mat, exp_mat, areas,
+                        fig_path=f"{out_dir}/fig_4_2_2{sfx}.png")
+    # Fig 4.3.1 GLM all cells; Fig 4.3.2 GLM observed cells only
+    visualize_heatmap(_to_df(glm_all),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
-                      max_limit=hmax, fig_path=f"{out_dir}/fig_4_3_1{sfx}.png")
+                      **hm, fig_path=f"{out_dir}/fig_4_3_1{sfx}.png")
+    visualize_heatmap(_to_df(g_obs),
+                      "Estimated Pure Premium Rates -- GLM (grey = missing)", **hm,
+                      fig_path=f"{out_dir}/fig_4_3_2{sfx}.png")
+    # Fig 4.5.1 MF scatter; 4.5.2 MF all-cell heatmap; 4.5.3 interaction panels
+    visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
+                           fig_path=f"{out_dir}/fig_4_5_1{sfx}.png")
+    visualize_heatmap(_to_df(estimated_mf),
+                      "Estimated Pure Premium Rates (Matrix Factorization)", **hm,
+                      fig_path=f"{out_dir}/fig_4_5_2{sfx}.png")
+    visualize_interaction_panels(
+        [("Actual", pp_mat, obs_cells),
+         ("Main-effects GLM", glm_all, np.isfinite(glm_all)),
+         ("Matrix factorization, k=2", estimated_mf,
+          np.ones_like(obs_cells, dtype=bool))],
+        exp_mat, row_order, col_order, areas, pp_mat.shape[0],
+        fig_path=f"{out_dir}/fig_4_5_3{sfx}.png")
+    # Fig 4.6.1 CMF scatter
+    visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
+                           max_lim=smax, fig_path=f"{out_dir}/fig_4_6_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
     # by glmm_pymc.py -- a fully-converged Bayesian GLMM with uncertainty --
