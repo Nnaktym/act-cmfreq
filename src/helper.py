@@ -528,7 +528,7 @@ def two_way_residual(mat, obs, w, n_iter=25):
 
 def visualize_heatmap(data, title="", max_limit=5000, fig_path=None,
                       row_order=None, col_order=None, log=False,
-                      mark_missing=False, vmin=None):
+                      mark_missing=False, vmin=None, ylabel=None):
     """Heatmap of a wide matrix (cf. cmf.R::visualize_heatmap).
 
     `data` is a wide DataFrame (index = model, columns = region).
@@ -569,8 +569,8 @@ def visualize_heatmap(data, title="", max_limit=5000, fig_path=None,
     plt.colorbar(im, label=cbar_label)
     ordered = row_order is not None or col_order is not None
     plt.xlabel("State  (low → high cost)" if ordered else "State")
-    plt.ylabel(f"Vehicle Group (n={n_rows})"
-               + ("  (low → high cost)" if ordered else ""))
+    _ylab = ylabel if ylabel is not None else f"Vehicle Group (n={n_rows})"
+    plt.ylabel(_ylab + ("  (low → high cost)" if ordered else ""))
     plt.title(title)
     if mark_missing:
         plt.legend(handles=[Patch(facecolor=MISSING_COLOR, edgecolor="none",
