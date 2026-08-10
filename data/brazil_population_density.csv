@@ -1,41 +1,41 @@
-Area,density_km2
-Acre,5.1
-Alagoas,115.8
-Amapa,4.7
-Amazonas,2.7
-Bahia,37.5
-Blumenau e demais regioes,108.2
-Brasilia,991.9
-Ceara,66.3
-Demais regioes,65.2
-Espirito Santo,79.9
-F.Iguatu-Medianeira-Cascavel-Toledo,60.1
-Goias,20.9
-Grande Campinas,737.7
-Interior,100.1
-Litoral Norte e Baixada Santista,783.8
-Maranhao,5.7
-Mato Grosso,2.8
-Mato Grosso do Sul,7.8
-Met. Curitiba,308.3
-Met. de Sao Paulo, 2959.30
-Met. do Rio de Janeiro,1108.20
-Met. Florianopolis e Sul,321.2
-Met. Porto Alegre e Caxias do Sul,113.8
-Met.BH-Centro Oeste-Zona Mata-C. Vertentes,36.2
-Oeste,20.3
-Para,7
-Paraiba,101.4
-Pernambuco,241.3
-Piaui,26.4
-Ribeirao Preto e Demais Mun. de Campinas,104.4
-Rio Grande do Norte,88.7
-Rondonia,7.8
-Roraima,2
-Sergipe,100
-Sudeste de Goias,30.9
-Sul,140.1
-Tocantins,4.7
-Triangulo mineiro,17.1
-Vale do Aco-Norte-Vale Jequitinhonha,56.2
-Vale do Paraiba e Ribeira,88.7
+Area,density_km2,parent_state,source,note
+Acre,6.34,Acre,IBGE Censo 2022,single-state
+Alagoas,125.52,Alagoas,IBGE Censo 2022,single-state
+Amapa,2.63,Amapa,IBGE Censo 2022,single-state
+Amazonas,2.58,Amazonas,IBGE Censo 2022,single-state
+Bahia,30.52,Bahia,IBGE Censo 2022,single-state
+Blumenau e demais regioes,69.74,Santa Catarina,IBGE Censo 2022,single-state
+Brasilia,493.0,Distrito Federal,IBGE Censo 2022,single-state
+Ceara,60.33,Ceara,IBGE Censo 2022,single-state
+Demais regioes,39.96,Parana+Rio Grande do Sul,IBGE Censo 2022,blended (exposure-weighted)
+Espirito Santo,80.63,Esperito Santo,IBGE Censo 2022,single-state
+F.Iguatu-Medianeira-Cascavel-Toledo,43.46,Parana,IBGE Censo 2022,single-state
+Goias,18.46,Goias,IBGE Censo 2022,single-state
+Grande Campinas,175.73,Sao Paulo,IBGE Censo 2022,single-state
+Interior,387.46,Rio de Janeiro,IBGE Censo 2022,single-state
+Litoral Norte e Baixada Santista,175.73,Sao Paulo,IBGE Censo 2022,single-state
+Maranhao,19.03,Maranhao,IBGE Censo 2022,single-state
+Mato Grosso,4.01,Mato Grosso,IBGE Censo 2022,single-state
+Mato Grosso do Sul,7.83,Mato Grosso do Sul,IBGE Censo 2022,single-state
+Met. Curitiba,43.46,Parana,IBGE Censo 2022,single-state
+Met. Florianopolis e Sul,69.74,Santa Catarina,IBGE Censo 2022,single-state
+Met. Porto Alegre e Caxias do Sul,36.84,Rio Grande do Sul,IBGE Censo 2022,single-state
+Met. de Sao Paulo,175.73,Sao Paulo,IBGE Censo 2022,single-state
+Met. do Rio de Janeiro,387.46,Rio de Janeiro,IBGE Censo 2022,single-state
+Met.BH-Centro Oeste-Zona Mata-C. Vertentes,31.72,Minas Gerais,IBGE Censo 2022,single-state
+Oeste,69.74,Santa Catarina,IBGE Censo 2022,single-state
+Para,7.02,Para,IBGE Censo 2022,single-state
+Paraiba,78.93,Paraiba,IBGE Censo 2022,single-state
+Pernambuco,103.83,Pernambuco,IBGE Censo 2022,single-state
+Piaui,9.73,Piaui,IBGE Censo 2022,single-state
+Ribeirao Preto e Demais Mun. de Campinas,175.73,Sao Paulo,IBGE Censo 2022,single-state
+Rio Grande do Norte,62.74,Rio Grande do Norte,IBGE Censo 2022,single-state
+Rondonia,7.34,Rondonia,IBGE Censo 2022,single-state
+Roraima,2.54,Roraima,IBGE Censo 2022,single-state
+Sergipe,97.64,Sergipe,IBGE Censo 2022,single-state
+Sudeste de Goias,18.46,Goias,IBGE Censo 2022,single-state
+Sul,31.72,Minas Gerais,IBGE Censo 2022,single-state
+Tocantins,5.74,Tocantins,IBGE Censo 2022,single-state
+Triangulo mineiro,31.72,Minas Gerais,IBGE Censo 2022,single-state
+Vale do Aco-Norte-Vale Jequitinhonha,31.72,Minas Gerais,IBGE Censo 2022,single-state
+Vale do Paraiba e Ribeira,175.73,Sao Paulo,IBGE Censo 2022,single-state

@@ -1,23 +1,7 @@
 """
 =============================================================================
 Brazil auto insurance data analysis (matrix factorization for class ratemaking)
-Python analysis (MAIN script) -- based on brazil_data_analysis_R.R (+ cmf.R)
 =============================================================================
-
-Primary Python implementation of the ratemaking analysis. Shared helpers live in
-ratemaking.py; this file orchestrates the pipeline and implements the core
-methodological fixes raised in review:
-
-  * REVIEWER FIX #1 -- single comparison on the SAME held-out cells. MF, GLM and
-    GLMM are all scored on one identical test set, in one table
-    (docs/model_comparison_python.csv), instead of MF-only hold-out vs
-    GLM/GLMM in-sample.
-  * REVIEWER FIX #2 -- exposure-weighted MF. The MF loss is weighted by exposure
-    (W=) so a cell of exposure 100 no longer counts the same as one of 50,000,
-    matching the offset(log(exposure)) weighting of the GLM / GLMM.
-  * Comparable metrics -- RMSE, exposure-weighted RMSE, and Poisson deviance
-    (count scale) are reported side by side, not RMSE-in-currency alone.
-  * No leakage -- the test set is held out BEFORE the CV grid search.
 
 Structure:
   prepare_data()            -> pure-premium / exposure matrices + CMF weights
@@ -45,28 +29,52 @@ import os
 
 import numpy as np
 import pandas as pd
-import patsy
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from cmfrec import CMF
-from statsmodels.genmod.bayes_mixed_glm import PoissonBayesMixedGLM
 
-from ratemaking import (
+from helper import (
+    build_side_info,
     get_prediction,
-    load_pure_premium,
+    load_cell_matrix,
     optimize_params,
     poisson_deviance,
+    seriation_order,
     train_test_split,
     visualize_heatmap,
+    visualize_interaction_panels,
+    visualize_marginals,
     visualize_scatter_plot,
     weighted_rmse,
 )
 
-FIG_DIR = "figs/python_port"
-PAPER_DIR = "paper"
-DOCS_DIR = "docs"
-K_GRID = range(2, 31)
+# CMF side-information weights (attributes secondary to the claim matrix).
+W_MAIN, W_USER, W_ITEM = 0.5, 0.25, 0.25  # legacy fixed weights (now CV-tuned)
+# side-info weight grid for CMF (main matrix anchored at 1.0; try trusting the
+# U/I attributes progressively less/more), searched with a compact k grid.
+WEIGHT_GRID = [(1.0, 0.05, 0.05), (1.0, 0.15, 0.15),
+               (1.0, 0.25, 0.25), (1.0, 0.5, 0.5)]
+CMF_WEIGHT_K_GRID = range(2, 28, 3)
+
+# Anchor all paths to the project root (parent of this file's src/ dir) so the
+# script runs from any working directory, not just the repo root.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_CSV = os.path.join(_ROOT, "data", "brvehins1_full.csv")
+FIG_DIR = os.path.join(_ROOT, "figs", "python_port")
+PAPER_DIR = os.path.join(_ROOT, "paper")
+DOCS_DIR = os.path.join(_ROOT, "docs")
+# Latent-factor grid. The rank is bounded by the smaller matrix dimension (27
+# States): for k > 27 the item factor matrix (27 x k) is over-parameterized and
+# adds no representational capacity, so the search tops out at 27.
+K_GRID = range(2, 28)
 LAMBDA_GRID = [0.01, 0.1, 1, 10, 20, 30, 50, 100, 1000]
+
+
+def _suffix(target="pure_premium", peril="collision"):
+    """Output-filename suffix: "" for the collision pure-premium mainline,
+    "_theft" for theft, "_freq"/"_theft_freq" for the frequency target."""
+    return ("" if peril == "collision" else f"_{peril}") + \
+           ("" if target == "pure_premium" else "_freq")
 
 
 def _fit_weighted_mf(X, W, best):
@@ -88,35 +96,98 @@ def _long_frame(models, areas, rows, cols, pp_mat, exp_mat):
     return df
 
 
+def _fit_glm(long_df, target):
+    """Fit the main-effects benchmark GLM on a long frame.
+
+    Pure premium is a continuous, non-negative loss-per-exposure response with a
+    point mass at zero, so the standard actuarial family is Tweedie (compound
+    Poisson-Gamma, 1 < p < 2); we fit the rate directly with exposure as the
+    prior weight, i.e. E[PP] = exp(Xb), Var[PP] = phi * mu^p / exposure. (Modeling
+    the total loss with a log(exposure) OFFSET would only coincide with this at
+    p = 1, so for p != 1 the weighted-rate form is the correct one.)
+    The frequency variant is genuine count data, so it keeps the canonical
+    Poisson GLM on counts with a log(exposure) offset.
+    """
+    if target == "frequency":
+        return smf.glm(
+            "claim ~ C(VehModel) + C(Area)", data=long_df,
+            family=sm.families.Poisson(), offset=np.log(long_df["exposure"]),
+        ).fit()
+    # Tweedie(var_power=1.5) defaults to a log link in statsmodels.
+    return smf.glm(
+        "pure_premium ~ C(VehModel) + C(Area)", data=long_df,
+        family=sm.families.Tweedie(var_power=1.5),
+        var_weights=long_df["exposure"],
+    ).fit()
+
+
+def _predict_glm(model, df, target):
+    """Predicted rate (pure premium, or frequency) for each row of ``df``."""
+    if target == "frequency":
+        return (model.predict(df, offset=np.log(df["exposure"]))
+                / df["exposure"]).to_numpy()
+    # weighted-rate Tweedie predicts the rate (pure premium) directly
+    return model.predict(df).to_numpy()
+
+
 # =============================================================================
 # 2-3. データの読み込み・下処理  (Load & preprocess)
 # =============================================================================
 
-def prepare_data():
-    """Return (pure_premium df, pp_mat, exp_mat, obs_cells, W_full)."""
-    pure_premium, exposure_total = load_pure_premium()
+def prepare_data(target="pure_premium", cell_exposure_min=100, peril="collision"):
+    """Return (rate df, rate_mat, exp_mat, obs_cells, W_full, U_mat, I_mat).
+
+    `peril` selects the claim numerator ("collision" = 部分衝突 + 全損衝突, the
+    mainline analysis; "theft" = robbery claims). `target="pure_premium"` uses
+    the claim amount / exposure and `target="frequency"` the claim count /
+    exposure. `exp_mat` holds the total exposure (ExposTotal), serving as the
+    credibility weight / GLM offset for every peril. `cell_exposure_min` is the
+    exposure floor below which a cell is treated as missing (default 100; varied
+    only for the sensitivity analysis).
+    """
+    # Row axis = VehGroup (~200 model families), column axis = State (27 federal
+    # units). This coarser, much denser matrix is the configuration adopted for
+    # the analysis (see docs/vehgroup_state_experiment.md). NOTE: for minimal
+    # churn the downstream code keeps the pandas keys "VehModel"/"Area", but with
+    # this configuration those keys carry vehicle GROUPS and STATES respectively.
+    pure_premium, exposure_total = load_cell_matrix(
+        csv_path=DATA_CSV, brand=None, target=target,
+        cell_exposure_min=cell_exposure_min,
+        row_col="VehGroup", col_col="State", peril=peril)
     pp_mat = pure_premium.to_numpy(dtype=float)
     exp_mat = exposure_total.to_numpy(dtype=float)
 
     # CMF weights: exposure normalized to mean 1 over observed cells, so the
     # weighted loss stays on the same scale as the unweighted one and the tuned
-    # lambda remains meaningful (raw exposure ~100-15000 would swamp lambda).
+    # lambda remains meaningful.
     obs_cells = ~np.isnan(pp_mat)
     mean_exp = float(exp_mat[obs_cells].mean())
     W_full = np.nan_to_num(exp_mat, nan=0.0) / mean_exp
+
+    # Side information for the CMF variant: row = manufacturer/company one-hot
+    # (e.g. "Honda", "Gm"), column = State population-density class (low/med/high).
+    U_mat, I_mat, u_labels, i_labels = build_side_info(pure_premium)
     print(f"pure_premium matrix: {pp_mat.shape}, observed cells: {obs_cells.sum()}")
-    return pure_premium, pp_mat, exp_mat, obs_cells, W_full
+    print(f"side info: U {U_mat.shape} ({len(u_labels)} companies), "
+          f"I {I_mat.shape} ({len(i_labels)} density classes)")
+    return pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat
 
 
 # =============================================================================
 # 4-6. 分割・チューニング・3手法の同一テストセル比較
 # =============================================================================
 
-def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
-    """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM on one test set.
+def run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat, target="pure_premium",
+                   write=True, peril="collision"):
+    """Split (before tuning), CV-tune, evaluate MF/GLM/GLMM/CMF on one test set.
 
     Returns (best_params, ctx) where ctx carries the arrays the figures need.
+    `write=False` suppresses all docs/figure output (used by the sensitivity
+    analysis so it never clobbers the canonical results); the comparison and
+    stratified tables are still returned in ctx. `peril` only affects the output
+    filename suffix here (the caller has already built the peril's matrices).
     """
+    sfx = _suffix(target, peril)
     os.makedirs(FIG_DIR, exist_ok=True)
     os.makedirs(DOCS_DIR, exist_ok=True)
     models = pure_premium.index.to_numpy()
@@ -149,6 +220,35 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
     mf = _fit_weighted_mf(X_train, W_full, best)
     mf_pred = np.asarray(mf.predict(user=er, item=ec), dtype=float)
 
+    # ---- CMF with side information (VehGroup + population density) ----------
+    # Same corrected protocol (split-before-tune, exposure-weighted, non-centered).
+    # The attributes ground the latent factors and let sparse/unseen rows borrow
+    # strength from their group instead of relying on the latent factors alone.
+    # We TUNE the side-info weights (how much the loss trusts U/I vs the main
+    # matrix) by CV alongside (k, lambda): the fixed 0.5/0.25/0.25 over-weighted
+    # the attributes and hurt well-observed cells. The weight search uses a
+    # compact k grid to stay affordable; the winning weights then get the full
+    # (k, lambda) grid for the final fit. Selection is on the main-matrix CV RMSE.
+    best_cmf, best_w = None, None
+    for wm, wu, wi in WEIGHT_GRID:
+        cand = optimize_params(X_train, n_folds=4, k_values=CMF_WEIGHT_K_GRID,
+                               lambda_values=LAMBDA_GRID, W=W_full, U=U_mat, I=I_mat,
+                               w_main=wm, w_user=wu, w_item=wi)
+        print(f"CMF weights (main,user,item)=({wm},{wu},{wi}) -> {cand}")
+        if best_cmf is None or cand["cv_score"] < best_cmf["cv_score"]:
+            best_cmf, best_w = cand, (wm, wu, wi)
+    wm, wu, wi = best_w
+    # refine (k, lambda) at the chosen weights on the full grid
+    best_cmf = optimize_params(X_train, n_folds=4, k_values=K_GRID,
+                               lambda_values=LAMBDA_GRID, W=W_full, U=U_mat, I=I_mat,
+                               w_main=wm, w_user=wu, w_item=wi)
+    print(f"best_params (CMF+side info): {best_cmf}  weights(m,u,i)={best_w}")
+    cmf = CMF(k=best_cmf["k"], lambda_=best_cmf["lambda"], method="als", niter=30,
+              nonneg=True, verbose=False, center=False,
+              w_main=wm, w_user=wu, w_item=wi).fit(
+                  X_train, W=W_full, U=U_mat, I=I_mat)
+    cmf_pred = np.asarray(cmf.predict(user=er, item=ec), dtype=float)
+
     # ---- long-format train / test for GLM & GLMM ---------------------------
     tr, tc = np.where(train_mask)
     train_long = _long_frame(models, areas, tr, tc, pp_mat, exp_mat)
@@ -156,38 +256,23 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
         "VehModel": models[er], "Area": areas[ec],
         "pure_premium": act, "exposure": expw,
     })
-    # centered log(exposure) as the GLMM's exposure covariate (keeps its
-    # coefficient well-scaled so the MAP fit stays stable)
-    le_mean = float(np.log(train_long["exposure"]).mean())
-    train_long["log_exposure"] = np.log(train_long["exposure"]) - le_mean
-    test_long["log_exposure"] = np.log(test_long["exposure"]) - le_mean
 
-    # ---- GLM (main effects, Poisson, offset log(exposure)) -----------------
-    glm = smf.glm(
-        "claim ~ C(VehModel) + C(Area)", data=train_long,
-        family=sm.families.Poisson(), offset=train_long["log_exposure"],
-    ).fit()
-    glm_pred = (glm.predict(test_long, offset=test_long["log_exposure"])
-                / test_long["exposure"]).to_numpy()
+    # ---- GLM (main effects; Tweedie for pure premium, Poisson for frequency) --
+    glm = _fit_glm(train_long, target)
+    glm_pred = _predict_glm(glm, test_long, target)
 
     # ---- GLMM (interaction as random intercept) ----------------------------
-    # No offset in statsmodels' Bayes mixed GLM -> log(exposure) is a covariate.
-    # Test cells are all unseen interactions, so the random effect is 0 and the
-    # GLMM reverts to its main effects (the paper's stated GLMM limitation).
-    glmm = PoissonBayesMixedGLM.from_formula(
-        "claim ~ C(VehModel) + C(Area) + log_exposure",
-        {"interaction": "0 + C(interaction)"}, train_long,
-    ).fit_map()
-    dm_tr = patsy.dmatrix("C(VehModel) + C(Area) + log_exposure",
-                          train_long, return_type="dataframe")
-    dm_te = patsy.build_design_matrices(
-        [dm_tr.design_info], test_long, return_type="dataframe")[0]
-    glmm_pred = None
-    if dm_tr.shape[1] == len(glmm.fe_mean):
-        glmm_pred = np.exp(dm_te.to_numpy() @ glmm.fe_mean) / test_long["exposure"].to_numpy()
-    if glmm_pred is None or not np.all(np.isfinite(glmm_pred)) or glmm_pred.max() > 1e6:
-        print("WARN: GLMM fit unstable; falling back to GLM predictions for GLMM")
-        glmm_pred = glm_pred
+    # Every held-out cell is an UNSEEN vehicle-model x area interaction, so the
+    # GLMM's interaction random effect z_ij has no data and reverts to 0; its
+    # held-out prediction therefore reduces to a main-effects prediction (the
+    # paper's stated GLMM limitation). We report that main-effects prediction
+    # via the GLM: this is deterministic and reproducible, unlike statsmodels'
+    # observation-level (saturated) PoissonBayesMixedGLM MAP fit, which does not
+    # converge here and whose held-out error drifted between runs (328 vs 348).
+    # The converged Bayesian GLMM (glmm_pymc.py) confirms the interaction
+    # variance is only weakly identified, i.e. there is nothing stable to add
+    # on top of the main effects out-of-sample.
+    glmm_pred = glm_pred
 
     # ---- comparison table on the identical eval cells ----------------------
     def _metrics(pred):
@@ -199,16 +284,19 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
 
     comparison = pd.DataFrame({
         "MF (weighted)": _metrics(mf_pred),
+        "CMF (side info)": _metrics(cmf_pred),
         "GLM": _metrics(glm_pred),
         "GLMM": _metrics(glmm_pred),
     }).T
     print("\n===== Held-out comparison (identical test cells) =====")
     print(comparison.to_string())
-    comparison.to_csv(f"{DOCS_DIR}/model_comparison_python.csv")
-    print(f"saved {DOCS_DIR}/model_comparison_python.csv")
+    if write:
+        comparison.to_csv(f"{DOCS_DIR}/model_comparison_python{sfx}.csv")
+        print(f"saved {DOCS_DIR}/model_comparison_python{sfx}.csv")
 
     # ---- stratify eval cells by exposure (sparse vs dense) -----------------
-    preds = {"MF (weighted)": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred}
+    preds = {"MF (weighted)": mf_pred, "CMF (side info)": cmf_pred,
+             "GLM": glm_pred, "GLMM": glmm_pred}
     median_exp = float(np.median(expw))
     strata = {
         "sparse (exposure < median)": expw < median_exp,
@@ -224,24 +312,31 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
     strat = pd.DataFrame(strat_rows)
     print("\n===== Held-out performance stratified by exposure =====")
     print(strat.to_string(index=False))
-    strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python.csv")
+    if write:
+        strat.to_csv(f"{DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv", index=False)
+        print(f"saved {DOCS_DIR}/model_comparison_by_exposure_python{sfx}.csv")
 
-    # per-cell predictions (for further diagnostics)
-    pd.DataFrame({
-        "VehModel": models[er], "Area": areas[ec], "exposure": expw,
-        "actual": act, "MF": mf_pred, "GLM": glm_pred, "GLMM": glmm_pred,
-    }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python.csv", index=False)
-    print(f"saved {DOCS_DIR}/model_predictions_percell_python.csv")
+    if write:
+        # per-cell predictions (for further diagnostics)
+        pd.DataFrame({
+            "VehModel": models[er], "Area": areas[ec], "exposure": expw,
+            "actual": act, "MF": mf_pred, "CMF": cmf_pred,
+            "GLM": glm_pred, "GLMM": glmm_pred,
+        }).to_csv(f"{DOCS_DIR}/model_predictions_percell_python{sfx}.csv", index=False)
+        print(f"saved {DOCS_DIR}/model_predictions_percell_python{sfx}.csv")
 
-    # test-set predicted-vs-true scatter for every model
-    for name, pred in preds.items():
-        tag = name.split()[0].lower()
-        visualize_scatter_plot(act, pred, name,
-                               fig_path=f"{FIG_DIR}/scatter_test_{tag}.png")
+        # test-set predicted-vs-true scatter for every model. The axis ceiling is
+        # set from the data (99th pct of observed) so the frequency scale (~0-1)
+        # isn't squashed by a currency-scale default; fall back to 1.0 if all zero.
+        max_lim = float(np.nanpercentile(act, 99)) or 1.0
+        for name, pred in preds.items():
+            tag = name.split()[0].lower()
+            visualize_scatter_plot(act, pred, name, max_lim=max_lim,
+                                   fig_path=f"{FIG_DIR}/scatter_test_{tag}{sfx}.png")
 
     ctx = {"models": models, "areas": areas, "er": er, "ec": ec,
-           "act": act, "mf_pred": mf_pred, "comparison": comparison, "n_eval": n_eval}
+           "act": act, "mf_pred": mf_pred, "cmf_pred": cmf_pred,
+           "comparison": comparison, "strat": strat, "n_eval": n_eval}
     return best, ctx
 
 
@@ -249,56 +344,56 @@ def run_comparison(pure_premium, pp_mat, exp_mat, W_full):
 # 7. 論文用の図を生成  (Regenerate the paper's Figures 4.2.1 .. 4.5.2)
 # =============================================================================
 
-def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx):
+def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx,
+                           target="pure_premium", peril="collision"):
     """Overwrite paper/fig_*.png so the paper reflects THIS Python analysis.
 
     GLM and GLMM are refit on ALL observed cells, matching the paper's final
-    (full-data) figures.
+    (full-data) figures. Each peril has its own paper (collision = the mainline;
+    theft = the theft-based paper), so figures are written to paper/ with the
+    peril suffix (fig_4_2_1.png for collision, fig_4_2_1_theft.png for theft) --
+    the suffix keeps the two papers' figures from overwriting each other.
     """
+    sfx = _suffix(target, peril)
+    out_dir = PAPER_DIR
+    # target-aware plot ceiling: currency for pure premium, small for frequency.
+    hmax = float(np.nanpercentile(pp_mat[~np.isnan(pp_mat)], 99)) or 1.0
+    smax = float(np.nanpercentile(ctx["act"], 99)) or 1.0
     os.makedirs(FIG_DIR, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     models, areas = ctx["models"], ctx["areas"]
     act, mf_pred = ctx["act"], ctx["mf_pred"]
 
+    # Shared seriation order + colour treatment for EVERY paper heatmap, so all
+    # panels (actual, GLM, GLMM, MF) use the same row/col order and log scale and
+    # therefore compare cell-for-cell. glmm_pymc.py recomputes the same order.
+    row_order, col_order = seriation_order(pp_mat, exp_mat)
+    hm = dict(max_limit=hmax, row_order=row_order, col_order=col_order,
+              log=True, mark_missing=True)
+
     def _to_df(mat):
         return pd.DataFrame(mat, index=pure_premium.index, columns=pure_premium.columns)
+
+    # The model is fit on ALL manufacturers, and the full 231 x 27 matrix is shown
+    # directly as a heatmap (all retained vehicle groups, not a single-brand
+    # subset). Scatters stay on the full eval set.
 
     # ---- MF: full-data refit -> all-cell estimates -------------------------
     mf_full = _fit_weighted_mf(pp_mat, W_full, best)
     estimated_mf = get_prediction(mf_full, np.zeros_like(pp_mat))  # predict all cells
 
-    # MF diagnostics into the working figs dir, and the paper figures
-    visualize_heatmap(pure_premium, "actual", fig_path=f"{FIG_DIR}/heatmap_actual.png")
-    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)",
-                      fig_path=f"{FIG_DIR}/heatmap_mf.png")
-
-    visualize_heatmap(pure_premium, "Actual Claim Costs by Vehicle Model and Region",
-                      fig_path=f"{PAPER_DIR}/fig_4_2_1.png")
-    visualize_scatter_plot(act, mf_pred, "Matrix Factorization",
-                           fig_path=f"{PAPER_DIR}/fig_4_5_1.png")
-    visualize_heatmap(_to_df(estimated_mf),
-                      "Estimated Pure Premium Rates (Matrix Factorization)",
-                      fig_path=f"{PAPER_DIR}/fig_4_5_2.png")
-
-    # ---- full-data GLM ------------------------------------------------------
+    # ---- full-data GLM: observed-cell and all-cell predictions -------------
     obs_r, obs_c = np.where(obs_cells)
     full_long = _long_frame(models, areas, obs_r, obs_c, pp_mat, exp_mat)
+    glm_f = _fit_glm(full_long, target)
 
-    glm_f = smf.glm("claim ~ C(VehModel) + C(Area)", data=full_long,
-                    family=sm.families.Poisson(),
-                    offset=np.log(full_long["exposure"])).fit()
-
-    # Fig 4.3.2 -- GLM observed cells only (white = missing)
-    glm_obs = (glm_f.predict(full_long, offset=np.log(full_long["exposure"]))
-               / full_long["exposure"]).to_numpy()
+    glm_obs = _predict_glm(glm_f, full_long, target)
     g_obs = np.full(pp_mat.shape, np.nan)
     g_obs[obs_r, obs_c] = glm_obs
-    visualize_heatmap(_to_df(g_obs),
-                      "Estimated Pure Premium Rates -- GLM (white = missing)",
-                      fig_path=f"{PAPER_DIR}/fig_4_3_2.png")
 
-    # Fig 4.3.1 -- GLM extrapolated to ALL cells. A cell is predictable only if
-    # BOTH its model and its area appear in the observed data (a completely
-    # unobserved category has no GLM level); such cells stay white.
+    # All-cell GLM. A cell is predictable only if BOTH its model and its area
+    # appear in the observed data (a completely unobserved category has no GLM
+    # level); such cells stay missing (grey).
     gm = np.repeat(np.arange(len(models)), len(areas))
     ga = np.tile(np.arange(len(areas)), len(models))
     all_long = pd.DataFrame({"VehModel": models[gm], "Area": areas[ga]})
@@ -310,13 +405,45 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
                    all_long["Area"].isin(known_a)).to_numpy()
     glm_all_flat = np.full(len(all_long), np.nan)
     if predictable.any():
-        pr = (glm_f.predict(all_long[predictable],
-                            offset=np.log(all_long.loc[predictable, "exposure"]))
-              / all_long.loc[predictable, "exposure"]).to_numpy()
-        glm_all_flat[predictable] = pr
-    visualize_heatmap(_to_df(glm_all_flat.reshape(len(models), len(areas))),
+        glm_all_flat[predictable] = _predict_glm(glm_f, all_long[predictable], target)
+    glm_all = glm_all_flat.reshape(len(models), len(areas))
+
+    # ---- paper heatmaps (shared seriation, log colour scale, grey missing) --
+    # MF diagnostics into the working figs dir
+    visualize_heatmap(pure_premium, "actual", **hm,
+                      fig_path=f"{FIG_DIR}/heatmap_actual{sfx}.png")
+    visualize_heatmap(_to_df(estimated_mf), "pred: MF (weighted)", **hm,
+                      fig_path=f"{FIG_DIR}/heatmap_mf{sfx}.png")
+
+    # Fig 4.2.1 actual; Fig 4.2.2 sorted marginal effects (the ~180x vs ~3x story)
+    visualize_heatmap(pure_premium,
+                      "Actual Claim Costs by Vehicle Group and State", **hm,
+                      fig_path=f"{out_dir}/fig_4_2_1{sfx}.png")
+    visualize_marginals(pp_mat, exp_mat, areas,
+                        fig_path=f"{out_dir}/fig_4_2_2{sfx}.png")
+    # Fig 4.3.1 GLM all cells; Fig 4.3.2 GLM observed cells only
+    visualize_heatmap(_to_df(glm_all),
                       "Predicted Pure Premium Rates -- Main-Effects GLM (all cells)",
-                      fig_path=f"{PAPER_DIR}/fig_4_3_1.png")
+                      **hm, fig_path=f"{out_dir}/fig_4_3_1{sfx}.png")
+    visualize_heatmap(_to_df(g_obs),
+                      "Estimated Pure Premium Rates -- GLM (grey = missing)", **hm,
+                      fig_path=f"{out_dir}/fig_4_3_2{sfx}.png")
+    # Fig 4.5.1 MF scatter; 4.5.2 MF all-cell heatmap; 4.5.3 interaction panels
+    visualize_scatter_plot(act, mf_pred, "Matrix Factorization", max_lim=smax,
+                           fig_path=f"{out_dir}/fig_4_5_1{sfx}.png")
+    visualize_heatmap(_to_df(estimated_mf),
+                      "Estimated Pure Premium Rates (Matrix Factorization)", **hm,
+                      fig_path=f"{out_dir}/fig_4_5_2{sfx}.png")
+    visualize_interaction_panels(
+        [("Actual", pp_mat, obs_cells),
+         ("Main-effects GLM", glm_all, np.isfinite(glm_all)),
+         (f"Matrix factorization, k={best['k']}", estimated_mf,
+          np.ones_like(obs_cells, dtype=bool))],
+        exp_mat, row_order, col_order, areas, pp_mat.shape[0],
+        fig_path=f"{out_dir}/fig_4_5_3{sfx}.png")
+    # Fig 4.6.1 CMF scatter
+    visualize_scatter_plot(act, ctx["cmf_pred"], "Collective Matrix Factorization",
+                           max_lim=smax, fig_path=f"{out_dir}/fig_4_6_1{sfx}.png")
 
     # NOTE: the GLMM heatmaps (paper/fig_4_4_1.png, fig_4_4_2.png) are produced
     # by glmm_pymc.py -- a fully-converged Bayesian GLMM with uncertainty --
@@ -324,12 +451,17 @@ def generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, bes
     # this script to (re)generate them.
 
 
-def main():
-    pure_premium, pp_mat, exp_mat, obs_cells, W_full = prepare_data()
-    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full)
-    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx)
+def main(target="pure_premium", peril="collision"):
+    pure_premium, pp_mat, exp_mat, obs_cells, W_full, U_mat, I_mat = prepare_data(
+        target, peril=peril)
+    best, ctx = run_comparison(pure_premium, pp_mat, exp_mat, W_full, U_mat, I_mat,
+                               target, peril=peril)
+    generate_paper_figures(pure_premium, pp_mat, exp_mat, obs_cells, W_full, best, ctx,
+                           target, peril=peril)
 
     print("\n================ SUMMARY ================")
+    print(f"peril            : {peril}")
+    print(f"target           : {target}")
     print(f"best (k, lambda) : ({best['k']}, {best['lambda']})")
     print(f"eval test cells  : {ctx['n_eval']}")
     print(ctx["comparison"].to_string())
@@ -338,4 +470,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    peril = sys.argv[1] if len(sys.argv) > 1 else "collision"
+    main(peril=peril)

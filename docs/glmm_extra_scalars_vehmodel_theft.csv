@@ -1,0 +1,11 @@
+,0
+tau2_insample,0.0
+sqrt_tau2_insample,0.0
+meanZ_insample,0.0
+n_obs,6600
+tau2_rec,0.0
+sqrt_tau2_rec,0.0
+meanZ_rec,0.0
+n_test_cells,6600
+n_train_cells,6600
+glmm_ne_glm,False
